@@ -1,17 +1,12 @@
 
-import re
-
+from app.brain.intent_handler import IntentHandler
 from app.commands.executor import CommandExecutor
 from app.commands.registry import CommandRegistry
 from app.core.action_result import ActionResult
-from app.brain.intent_handler import IntentHandler
-
-
-_CONFIRMATION_PATTERN = re.compile(r"^confirm ([A-Za-z0-9_-]+)$")
 
 
 class TextAssistant:
-    """Route explicit text commands through the secured executor."""
+    """Process text commands without implicitly approving sensitive actions."""
 
     def __init__(
         self,
@@ -27,7 +22,6 @@ class TextAssistant:
             return ActionResult(False, "Please enter a text command.")
 
         text = text.strip()
-
         if not text:
             return ActionResult(False, "Please enter a command.")
 
@@ -36,16 +30,22 @@ class TextAssistant:
                 command.name
                 for command in self._registry.list_commands()
             )
-            available = ", ".join(names) if names else "No commands registered."
+            available = (
+                ", ".join(names) if names else "No commands registered."
+            )
             return ActionResult(
                 True,
                 f"Available commands: {available}. "
                 "Use the exact command name followed by its arguments.",
             )
 
-        confirmation_match = _CONFIRMATION_PATTERN.fullmatch(text)
-        if confirmation_match:
-            return self._confirm(confirmation_match.group(1))
+        if text.casefold().startswith("confirm "):
+            return ActionResult(
+                False,
+                "Text confirmation is disabled. Approve or reject the "
+                "pending request through the application's explicit "
+                "approval interface.",
+            )
 
         intent = self._intent_handler.parse(text)
         if intent is None:
@@ -60,32 +60,14 @@ class TextAssistant:
             intent.arguments,
         )
 
-        if result.message.startswith("Confirmation required. Confirmation ID: "):
+        if result.message.startswith(
+            "Confirmation required. Confirmation ID: "
+        ):
             return ActionResult(
                 False,
-                result.message + " Type 'confirm ID' to approve this exact action.",
+                result.message
+                + " Approve or reject this request through the "
+                "application's explicit approval interface.",
             )
 
         return result
-
-    def _confirm(self, confirmation_id: str) -> ActionResult:
-        service = self._executor.approval_service
-        request = service.get_request(confirmation_id)
-
-        if request is None:
-            return ActionResult(
-                False,
-                "No valid pending approval exists for that ID.",
-            )
-
-        if not service.approve(request):
-            return ActionResult(
-                False,
-                "Approval failed or the request has expired.",
-            )
-
-        return self._executor.execute(
-            request.action,
-            request.arguments,
-            confirmation_id=confirmation_id,
-        )

@@ -24,7 +24,22 @@ def test_resolves_plain_filename_inside_base(tmp_path):
         "bad\x00name.txt",
         "bad\nname.txt",
         "C:secret.txt",
+        "C:\\secret.txt",
+        r"\\server\share\secret.txt",
         "notes.txt:payload",
+        "bad?.txt",
+        "bad*.txt",
+        "bad|name.txt",
+        "bad<name.txt",
+        "bad>name.txt",
+        "trailing.",
+        "trailing ",
+        "CON",
+        "CON.txt",
+        "nul",
+        "AUX.log",
+        "COM1.txt",
+        "LPT9.csv",
     ],
 )
 def test_rejects_unsafe_filenames(tmp_path, name):
@@ -33,8 +48,23 @@ def test_rejects_unsafe_filenames(tmp_path, name):
 
 
 def test_rejects_filename_longer_than_limit(tmp_path):
-    with pytest.raises(ValueError):
-        resolve_safe_path(tmp_path, "a" * 301)
+    with pytest.raises(ValueError, match="too long"):
+        resolve_safe_path(tmp_path, "a" * 256)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "notes.txt",
+        "report.final.txt",
+        "my-notes_2 (draft).txt",
+    ],
+)
+def test_accepts_ordinary_filenames(tmp_path, name):
+    result = resolve_safe_path(tmp_path, name)
+
+    assert result.parent == tmp_path.resolve()
+    assert result.name == name
 
 
 def test_rejects_symlink_that_escapes_base(tmp_path):
@@ -43,6 +73,7 @@ def test_rejects_symlink_that_escapes_base(tmp_path):
 
     base.mkdir()
     outside.mkdir()
+    (outside / "secret.txt").write_text("secret", encoding="utf-8")
 
     link = base / "escape.txt"
 
