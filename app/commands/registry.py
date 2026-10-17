@@ -8,6 +8,7 @@ class CommandSpec:
     name: str
     description: str
     handler: Callable[..., object]
+    requires_confirmation: bool = False
     validate_arguments: Callable[[tuple[str, ...]], bool] = (
         lambda arguments: True
     )
