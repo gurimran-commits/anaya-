@@ -1,7 +1,7 @@
-
 from app.commands.registry import CommandRegistry, CommandSpec
 from app.commands.executor import CommandExecutor
-from app.security.confirmation import ConfirmationManager
+from app.security.approval_service import ApprovalService
+
 
 def test_registered_command_executes():
     registry = CommandRegistry()
@@ -90,7 +90,7 @@ def test_sensitive_command_requires_confirmation():
     assert calls == []
 
 
-def test_sensitive_command_executes_after_matching_confirmation():
+def test_sensitive_command_executes_after_explicit_approval():
     calls = []
     registry = CommandRegistry()
     registry.register(
@@ -101,20 +101,54 @@ def test_sensitive_command_executes_after_matching_confirmation():
             requires_confirmation=True,
         )
     )
-    confirmations = ConfirmationManager()
-    executor = CommandExecutor(registry, confirmations)
 
-    request = confirmations.request("shutdown", ())
+    approvals = ApprovalService()
+    executor = CommandExecutor(registry, approvals)
+
+    request_result = executor.execute("shutdown")
+    confirmation_id = request_result.message.rsplit(": ", 1)[1]
+
+    request = approvals.get_request(confirmation_id)
+    assert request is not None
+    assert approvals.approve(request) is True
+
     result = executor.execute(
         "shutdown",
-        confirmation_id=request.confirmation_id,
+        confirmation_id=confirmation_id,
     )
 
     assert result.success is True
     assert calls == ["executed"]
 
 
-def test_sensitive_command_rejects_confirmation_for_different_arguments():
+def test_unapproved_confirmation_id_cannot_execute_sensitive_command():
+    calls = []
+    registry = CommandRegistry()
+    registry.register(
+        CommandSpec(
+            name="shutdown",
+            description="Test sensitive command",
+            handler=lambda: calls.append("executed"),
+            requires_confirmation=True,
+        )
+    )
+
+    approvals = ApprovalService()
+    executor = CommandExecutor(registry, approvals)
+
+    request_result = executor.execute("shutdown")
+    confirmation_id = request_result.message.rsplit(": ", 1)[1]
+
+    result = executor.execute(
+        "shutdown",
+        confirmation_id=confirmation_id,
+    )
+
+    assert result.success is False
+    assert calls == []
+
+
+def test_sensitive_command_rejects_approval_for_different_arguments():
     calls = []
     registry = CommandRegistry()
     registry.register(
@@ -126,14 +160,24 @@ def test_sensitive_command_rejects_confirmation_for_different_arguments():
             requires_confirmation=True,
         )
     )
-    confirmations = ConfirmationManager()
-    executor = CommandExecutor(registry, confirmations)
 
-    request = confirmations.request("delete_file", ("notes.txt",))
+    approvals = ApprovalService()
+    executor = CommandExecutor(registry, approvals)
+
+    request_result = executor.execute(
+        "delete_file",
+        ("notes.txt",),
+    )
+    confirmation_id = request_result.message.rsplit(": ", 1)[1]
+
+    request = approvals.get_request(confirmation_id)
+    assert request is not None
+    assert approvals.approve(request) is True
+
     result = executor.execute(
         "delete_file",
         ("important.txt",),
-        confirmation_id=request.confirmation_id,
+        confirmation_id=confirmation_id,
     )
 
     assert result.success is False

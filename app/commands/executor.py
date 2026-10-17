@@ -1,19 +1,23 @@
-
 from app.core.action_result import ActionResult
 from app.commands.registry import CommandRegistry
-from app.security.confirmation import ConfirmationManager
+from app.security.approval_service import ApprovalService
 
 
 class CommandExecutor:
-    """Execute registered commands with validation and confirmation."""
+    """Execute registered commands with explicit approval enforcement."""
 
     def __init__(
         self,
         registry: CommandRegistry,
-        confirmations: ConfirmationManager | None = None,
+        approval_service: ApprovalService | None = None,
     ) -> None:
         self._registry = registry
-        self._confirmations = confirmations or ConfirmationManager()
+        self._approval_service = approval_service or ApprovalService()
+
+    @property
+    def approval_service(self) -> ApprovalService:
+        """Expose the service for integration with the application UI."""
+        return self._approval_service
 
     def execute(
         self,
@@ -37,28 +41,44 @@ class CommandExecutor:
 
         if command.requires_confirmation:
             if confirmation_id is None:
-                pending = self._confirmations.request(name, arguments)
+                try:
+                    request = self._approval_service.request_approval(
+                        name,
+                        arguments,
+                    )
+                except (TypeError, ValueError):
+                    return ActionResult(
+                        success=False,
+                        message="Could not create an approval request.",
+                    )
+
                 return ActionResult(
                     success=False,
                     message=(
                         "Confirmation required. "
-                        f"Confirmation ID: {pending.confirmation_id}"
+                        f"Confirmation ID: {request.confirmation_id}"
                     ),
                 )
 
-            if not self._confirmations.approve(
+            if not self._approval_service.consume_authorization(
                 confirmation_id,
                 name,
                 arguments,
             ):
                 return ActionResult(
                     success=False,
-                    message="Confirmation is invalid, expired, or already used.",
+                    message=(
+                        "Approval is invalid, expired, mismatched, "
+                        "or already used."
+                    ),
                 )
 
         try:
             result = command.handler(*arguments)
-            return ActionResult(success=True, message=str(result))
+            return ActionResult(
+                success=True,
+                message=str(result),
+            )
         except Exception:
             return ActionResult(
                 success=False,
