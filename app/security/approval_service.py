@@ -1,8 +1,10 @@
+
 from dataclasses import dataclass
+from datetime import datetime
 from threading import RLock
 
 from app.security.confirmation import ConfirmationManager
-from datetime import datetime
+
 
 @dataclass(frozen=True)
 class ApprovalRequest:
@@ -10,6 +12,7 @@ class ApprovalRequest:
     action: str
     arguments: tuple[str, ...]
     message: str
+    expires_at: datetime
 
 
 @dataclass(frozen=True)
@@ -20,59 +23,97 @@ class _Authorization:
 
 
 class ApprovalService:
-    """Manage approval requests and one-time execution authorizations.
-
-    The application UI must call approve() only after an explicit
-    affirmative user action. This class alone cannot prove that a
-    human actually provided consent.
-    """
+    """Manage bounded, expiring requests and one-time authorizations."""
 
     def __init__(
         self,
         confirmations: ConfirmationManager | None = None,
+        max_pending: int = 1000,
+        max_authorizations: int = 1000,
     ) -> None:
+        if (
+            not isinstance(max_pending, int)
+            or isinstance(max_pending, bool)
+            or max_pending <= 0
+        ):
+            raise ValueError("max_pending must be a positive integer")
+
+        if (
+            not isinstance(max_authorizations, int)
+            or isinstance(max_authorizations, bool)
+            or max_authorizations <= 0
+        ):
+            raise ValueError(
+                "max_authorizations must be a positive integer"
+            )
+
         self._confirmations = confirmations or ConfirmationManager()
+        self._max_pending = max_pending
+        self._max_authorizations = max_authorizations
         self._requests: dict[str, ApprovalRequest] = {}
         self._authorizations: dict[str, _Authorization] = {}
         self._lock = RLock()
+
+    def _cleanup_locked(self) -> None:
+        """Remove expired state. Caller must hold the service lock."""
+        for confirmation_id, request in list(self._requests.items()):
+            if self._confirmations.is_expired(request.expires_at):
+                self._requests.pop(confirmation_id, None)
+                self._confirmations.reject(confirmation_id)
+
+        for confirmation_id, authorization in list(
+            self._authorizations.items()
+        ):
+            if self._confirmations.is_expired(
+                authorization.expires_at
+            ):
+                self._authorizations.pop(confirmation_id, None)
 
     def request_approval(
         self,
         action: str,
         arguments: tuple[str, ...] = (),
     ) -> ApprovalRequest:
-        pending = self._confirmations.request(action, arguments)
-
-        request = ApprovalRequest(
-            confirmation_id=pending.confirmation_id,
-            action=pending.action,
-            arguments=pending.arguments,
-            message=(
-                f"Approve action '{pending.action}' "
-                f"with arguments {pending.arguments!r}?"
-            ),
-        )
-
         with self._lock:
-            self._requests[request.confirmation_id] = request
+            self._cleanup_locked()
 
-        return request
+            if len(self._requests) >= self._max_pending:
+                raise ValueError("Too many pending approval requests")
+
+            pending = self._confirmations.request(action, arguments)
+
+            request = ApprovalRequest(
+                confirmation_id=pending.confirmation_id,
+                action=pending.action,
+                arguments=pending.arguments,
+                message=(
+                    f"Approve action '{pending.action}' "
+                    f"with arguments {pending.arguments!r}?"
+                ),
+                expires_at=pending.expires_at,
+            )
+            self._requests[request.confirmation_id] = request
+            return request
 
     def get_request(
         self,
         confirmation_id: str,
     ) -> ApprovalRequest | None:
-        """Retrieve the original request for presentation in the UI."""
+        """Return a request only while it remains valid."""
         with self._lock:
+            self._cleanup_locked()
             return self._requests.get(confirmation_id)
 
     def approve(self, request: ApprovalRequest) -> bool:
         """Approve an exact pending request and create one-time authority."""
         with self._lock:
-            original = self._requests.get(request.confirmation_id)
+            self._cleanup_locked()
 
-            # Do not accept altered or reconstructed request details.
+            original = self._requests.get(request.confirmation_id)
             if original is None or original != request:
+                return False
+
+            if len(self._authorizations) >= self._max_authorizations:
                 return False
 
             pending = self._confirmations.consume_if_matches(
@@ -91,22 +132,19 @@ class ApprovalService:
                 arguments=pending.arguments,
                 expires_at=pending.expires_at,
             )
-
             return True
 
     def reject(self, request: ApprovalRequest) -> bool:
         """Reject the original request and invalidate it."""
         with self._lock:
-            original = self._requests.get(request.confirmation_id)
+            self._cleanup_locked()
 
+            original = self._requests.get(request.confirmation_id)
             if original is None or original != request:
                 return False
 
             self._requests.pop(request.confirmation_id, None)
-
-            return self._confirmations.reject(
-                request.confirmation_id
-            )
+            return self._confirmations.reject(request.confirmation_id)
 
     def consume_authorization(
         self,
@@ -114,19 +152,15 @@ class ApprovalService:
         action: str,
         arguments: tuple[str, ...] = (),
     ) -> bool:
-        """Consume one-time authorization for the exact approved action."""
+        """Consume authorization once, for the exact approved action."""
         with self._lock:
+            self._cleanup_locked()
+
             authorization = self._authorizations.pop(
                 confirmation_id,
                 None,
             )
-
             if authorization is None:
-                return False
-
-            if self._confirmations.is_expired(
-                authorization.expires_at
-            ):
                 return False
 
             return (

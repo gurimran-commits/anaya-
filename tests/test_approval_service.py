@@ -151,3 +151,93 @@ def test_authorization_expires_at_original_deadline():
         "shutdown",
         (),
     ) is False
+
+def test_expired_request_is_removed_when_retrieved():
+    current_time = [datetime(2026, 1, 1, tzinfo=timezone.utc)]
+    manager = ConfirmationManager(
+        expiry_seconds=60,
+        clock=lambda: current_time[0],
+    )
+    service = ApprovalService(manager)
+    request = service.request_approval("shutdown")
+
+    current_time[0] += timedelta(seconds=61)
+
+    assert service.get_request(request.confirmation_id) is None
+    assert request.confirmation_id not in service._requests
+
+
+def test_expired_request_frees_pending_capacity():
+    current_time = [datetime(2026, 1, 1, tzinfo=timezone.utc)]
+    manager = ConfirmationManager(
+        expiry_seconds=60,
+        clock=lambda: current_time[0],
+    )
+    service = ApprovalService(manager, max_pending=1)
+
+    first = service.request_approval("shutdown")
+    current_time[0] += timedelta(seconds=61)
+
+    second = service.request_approval("delete_file", ("notes.txt",))
+
+    assert second.confirmation_id != first.confirmation_id
+    assert service.get_request(first.confirmation_id) is None
+
+
+def test_pending_request_limit_is_enforced():
+    service = ApprovalService(max_pending=1)
+    service.request_approval("shutdown")
+
+    import pytest
+
+    with pytest.raises(ValueError, match="Too many pending"):
+        service.request_approval("delete_file", ("notes.txt",))
+
+
+def test_expired_authorization_is_removed():
+    current_time = [datetime(2026, 1, 1, tzinfo=timezone.utc)]
+    manager = ConfirmationManager(
+        expiry_seconds=60,
+        clock=lambda: current_time[0],
+    )
+    service = ApprovalService(manager)
+    request = service.request_approval("shutdown")
+
+    assert service.approve(request)
+
+    current_time[0] += timedelta(seconds=61)
+
+    assert service.consume_authorization(
+        request.confirmation_id,
+        "shutdown",
+    ) is False
+    assert request.confirmation_id not in service._authorizations
+
+
+def test_authorization_capacity_rejects_additional_approval():
+    service = ApprovalService(max_authorizations=1)
+
+    first = service.request_approval("shutdown")
+    second = service.request_approval("delete_file", ("notes.txt",))
+
+    assert service.approve(first)
+    assert not service.approve(second)
+
+    # Capacity rejection leaves the second request available.
+    assert service.get_request(second.confirmation_id) == second
+
+    assert service.consume_authorization(
+        first.confirmation_id,
+        "shutdown",
+    )
+    assert service.approve(second)
+
+
+def test_approval_service_rejects_invalid_capacity():
+    import pytest
+
+    with pytest.raises(ValueError):
+        ApprovalService(max_pending=0)
+
+    with pytest.raises(ValueError):
+        ApprovalService(max_authorizations=0)
