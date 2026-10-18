@@ -1,3 +1,4 @@
+from pathlib import Path
 
 import pytest
 
@@ -54,18 +55,27 @@ def test_rejects_filename_longer_than_limit(tmp_path):
 
 @pytest.mark.parametrize(
     "name",
+    [None, 123, 1.5, Path("notes.txt")],
+)
+def test_rejects_non_string_filenames(tmp_path, name):
+    with pytest.raises(ValueError, match="Filename"):
+        resolve_safe_path(tmp_path, name)
+
+
+@pytest.mark.parametrize(
+    "name",
     [
         "notes.txt",
         "report.final.txt",
         "my-notes_2 (draft).txt",
     ],
 )
+
 def test_accepts_ordinary_filenames(tmp_path, name):
     result = resolve_safe_path(tmp_path, name)
 
     assert result.parent == tmp_path.resolve()
     assert result.name == name
-
 
 def test_rejects_symlink_that_escapes_base(tmp_path):
     base = tmp_path / "safe"

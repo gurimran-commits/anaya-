@@ -163,3 +163,33 @@ def test_closed_service_rejects_context_entry(filesystem):
 
     with pytest.raises(RuntimeError, match="closed"):
         service.__enter__()
+def test_rejects_internal_symlink_when_reading(filesystem):
+    service, root = filesystem
+    target = root / "target.txt"
+    target.write_text("private data", encoding="utf-8")
+    link = root / "linked.txt"
+
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlink creation is not supported")
+
+    with pytest.raises((ValueError, OSError)):
+        service.read_text(0, "linked.txt")
+
+def test_rejects_internal_symlink_when_deleting(filesystem):
+    service, root = filesystem
+    target = root / "target.txt"
+    target.write_text("keep this", encoding="utf-8")
+    link = root / "linked.txt"
+
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlink creation is not supported")
+
+    with pytest.raises((ValueError, OSError)):
+        service.delete_file(0, "linked.txt")
+
+    assert target.read_text(encoding="utf-8") == "keep this"
+    assert link.is_symlink()
