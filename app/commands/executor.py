@@ -46,12 +46,12 @@ class CommandExecutor:
                         name,
                         arguments,
                     )
-                except (TypeError, ValueError):
+
+                except Exception:
                     return ActionResult(
                         success=False,
                         message="Could not create an approval request.",
                     )
-
                 return ActionResult(
                     success=False,
                     message=(

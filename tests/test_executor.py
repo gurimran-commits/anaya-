@@ -182,3 +182,29 @@ def test_sensitive_command_rejects_approval_for_different_arguments():
 
     assert result.success is False
     assert calls == []
+
+
+def test_unexpected_approval_error_does_not_execute_command():
+    calls = []
+
+    class BrokenApprovalService:
+        def request_approval(self, name, arguments):
+            raise RuntimeError("Internal approval-service failure")
+
+    registry = CommandRegistry()
+    registry.register(
+        CommandSpec(
+            name="sensitive_action",
+            description="Test protected action",
+            handler=lambda: calls.append("executed"),
+            requires_confirmation=True,
+        )
+    )
+
+    executor = CommandExecutor(registry, BrokenApprovalService())
+
+    result = executor.execute("sensitive_action")
+
+    assert result.success is False
+    assert result.message == "Could not create an approval request."
+    assert calls == []
