@@ -82,19 +82,24 @@ def test_rejects_protected_directory(tmp_path, monkeypatch):
         FilesystemService((tmp_path,))
 
 
-
 def test_deletes_file(filesystem):
     service, root = filesystem
     (root / "old.txt").write_text("temporary", encoding="utf-8")
 
     assert service.delete_file(0, "old.txt") == "Deleted old.txt"
     assert not (root / "old.txt").exists()
+
+
 def test_rejects_symlink_when_reading(filesystem, tmp_path):
     service, root = filesystem
     outside = tmp_path / "outside.txt"
     outside.write_text("private data", encoding="utf-8")
+
     link = root / "linked.txt"
-    link.symlink_to(outside)
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlink creation is not supported")
 
     with pytest.raises((ValueError, OSError)):
         service.read_text(0, "linked.txt")
@@ -104,8 +109,12 @@ def test_rejects_symlink_when_deleting(filesystem, tmp_path):
     service, root = filesystem
     outside = tmp_path / "outside.txt"
     outside.write_text("keep this", encoding="utf-8")
+
     link = root / "linked.txt"
-    link.symlink_to(outside)
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlink creation is not supported")
 
     with pytest.raises((ValueError, OSError)):
         service.delete_file(0, "linked.txt")
@@ -119,6 +128,8 @@ def test_rejects_boolean_directory_index(filesystem):
 
     with pytest.raises(ValueError, match="index"):
         service.read_text(True, "notes.txt")
+
+
 def test_close_is_idempotent(filesystem):
     service, _ = filesystem
 
