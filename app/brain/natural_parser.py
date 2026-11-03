@@ -368,6 +368,12 @@ class NaturalLanguageParser:
                     directory_index=directory_index,
                 )
 
+        # 8. Task intents (if registered).
+        if any(registry.get(f"tasks.{action}") for action in ("create", "list", "complete", "cancel", "delete", "update", "get")):
+            task_res = self._match_task_intents(text, directory_index, context, registry)
+            if task_res is not None:
+                return task_res
+
         return None
 
     def parse(
@@ -657,6 +663,12 @@ class NaturalLanguageParser:
                     directory_index=dir_idx,
                 )
 
+        # 7. Match Task Operations (if registered).
+        if any(registry.get(f"tasks.{action}") for action in ("create", "list", "complete", "cancel", "delete", "update", "get")):
+            task_res = self._match_task_intents(cleaned_text, dir_idx, context, registry)
+            if task_res is not None:
+                return task_res
+
         # If no natural language pattern matched, return unsupported/unrecognized.
         return IntentResolution(
             status=IntentStatus.UNSUPPORTED,
@@ -741,6 +753,37 @@ class NaturalLanguageParser:
             return IntentResolution(
                 status=IntentStatus.INVALID,
                 message=f"Memory ID '{clean_arg}' is invalid.",
+            )
+
+        if pending_intent == "tasks.create":
+            clean_arg = argument.rstrip(".?!").strip()
+            if clean_arg:
+                intent = CommandIntent(pending_intent, (clean_arg,))
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=intent,
+                    target=clean_arg,
+                    directory_index=dir_idx,
+                )
+            return IntentResolution(
+                status=IntentStatus.INVALID,
+                message="Task title cannot be empty.",
+            )
+
+        if pending_intent in ("tasks.delete", "tasks.complete", "tasks.cancel", "tasks.get"):
+            clean_arg = argument.rstrip(".?!").strip()
+            if clean_arg:
+                intent = CommandIntent(pending_intent, (clean_arg,))
+                if registry.validate(intent.name, intent.arguments):
+                    return IntentResolution(
+                        status=IntentStatus.VALID,
+                        intent=intent,
+                        target=clean_arg,
+                        directory_index=dir_idx,
+                    )
+            return IntentResolution(
+                status=IntentStatus.INVALID,
+                message=f"Task ID '{clean_arg}' is invalid.",
             )
 
         return None
@@ -1035,8 +1078,12 @@ class NaturalLanguageParser:
                     directory_index=directory_index,
                 )
 
-            # Do not intercept memory deletion or clear commands as file operations.
-            if name.casefold() in {"memory", "memories", "all memories"} or name.casefold().startswith("memory "):
+            # Do not intercept memory or task deletion commands as file operations.
+            if (
+                name.casefold() in {"memory", "memories", "all memories", "task", "tasks"}
+                or name.casefold().startswith("memory ")
+                or name.casefold().startswith("task ")
+            ):
                 return None
 
             return IntentResolution(
@@ -1045,5 +1092,382 @@ class NaturalLanguageParser:
                 target=name,
                 directory_index=directory_index,
             )
+
+        return None
+
+    def _match_task_intents(
+        self,
+        text: str,
+        directory_index: str,
+        context: "ConversationContext",
+        registry: "CommandRegistry",
+    ) -> IntentResolution | None:
+        """Match natural language patterns for task management."""
+        task_manager = getattr(registry, "_task_manager", None)
+        from app.tasks.date_parser import DateParser
+        date_parser = DateParser()
+
+        # 1. Missing task title: "add a task", "create a task", "add task", "new task"
+        if registry.get("tasks.create") and re.match(
+            r"^(?:please\s+)?(?:add|create|make|new)\s+(?:a\s+)?task[\.!]?$",
+            text,
+            re.IGNORECASE,
+        ):
+            context.clear_pending()
+            context.set_pending(
+                "tasks.create",
+                "What task would you like to create?",
+                directory_index,
+                argument_name="title",
+            )
+            return IntentResolution(
+                status=IntentStatus.MISSING_ARGUMENT,
+                missing_argument_name="title",
+                message="What task would you like to create?",
+                directory_index=directory_index,
+            )
+
+        # 2. Missing task ID: "delete task", "remove task"
+        if registry.get("tasks.delete") and re.match(
+            r"^(?:please\s+)?(?:delete|remove)\s+(?:the\s+)?task[\.!]?$",
+            text,
+            re.IGNORECASE,
+        ):
+            context.clear_pending()
+            context.set_pending(
+                "tasks.delete",
+                "Which task ID would you like to delete?",
+                directory_index,
+                argument_name="task_id",
+            )
+            return IntentResolution(
+                status=IntentStatus.MISSING_ARGUMENT,
+                missing_argument_name="task_id",
+                message="Which task ID would you like to delete?",
+                directory_index=directory_index,
+            )
+
+        # 3. Missing task ID: "complete task", "finish task", "mark task as done"
+        if registry.get("tasks.complete") and re.match(
+            r"^(?:please\s+)?(?:complete|finish|mark\s+(?:as\s+)?(?:done|completed))\s+(?:the\s+)?task[\.!]?$",
+            text,
+            re.IGNORECASE,
+        ):
+            context.clear_pending()
+            context.set_pending(
+                "tasks.complete",
+                "Which task ID would you like to mark as completed?",
+                directory_index,
+                argument_name="task_id",
+            )
+            return IntentResolution(
+                status=IntentStatus.MISSING_ARGUMENT,
+                missing_argument_name="task_id",
+                message="Which task ID would you like to mark as completed?",
+                directory_index=directory_index,
+            )
+
+        # 4. Missing task ID: "cancel task"
+        if registry.get("tasks.cancel") and re.match(
+            r"^(?:please\s+)?cancel\s+(?:the\s+)?task[\.!]?$",
+            text,
+            re.IGNORECASE,
+        ):
+            context.clear_pending()
+            context.set_pending(
+                "tasks.cancel",
+                "Which task ID would you like to cancel?",
+                directory_index,
+                argument_name="task_id",
+            )
+            return IntentResolution(
+                status=IntentStatus.MISSING_ARGUMENT,
+                missing_argument_name="task_id",
+                message="Which task ID would you like to cancel?",
+                directory_index=directory_index,
+            )
+
+        # 5. List tasks
+        if registry.get("tasks.list"):
+            # Completed tasks
+            if re.match(
+                r"^(?:please\s+)?(?:show|list|view|display)\s+(?:all\s+|my\s+)?completed\s+tasks?[\.?!]?$",
+                text,
+                re.IGNORECASE,
+            ):
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("tasks.list", ("completed",)),
+                    directory_index=directory_index,
+                )
+            # Pending tasks
+            if re.match(
+                r"^(?:please\s+)?(?:show|list|view|display)\s+(?:all\s+|my\s+)?(?:pending\s+)?tasks?[\.?!]?$",
+                text,
+                re.IGNORECASE,
+            ) or re.match(
+                r"^(?:what\s+(?:do\s+i\s+need\s+to\s+do|are\s+my\s+tasks)(?:\s+today)?|what\s+tasks\s+do\s+i\s+have(?:\s+today)?)[\.?!]?$",
+                text,
+                re.IGNORECASE,
+            ):
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("tasks.list", ("pending",)),
+                    directory_index=directory_index,
+                )
+
+        # 6. Remind me to ...: e.g. "Remind me to call Divya at 5 PM"
+        if registry.get("tasks.create"):
+            remind_match = re.match(
+                r"^(?:please\s+)?remind\s+me\s+(?:to\s+)?(?P<content>.+?)[\.!]?$",
+                text,
+                re.IGNORECASE,
+            )
+            if remind_match:
+                content = self.clean_quotes(remind_match.group("content")).strip()
+                # Check for trailing time or date e.g. "call Divya at 5 PM"
+                time_split = re.search(r"\b(?:at|by|on)\s+(.+)$", content, re.IGNORECASE)
+                if time_split:
+                    tail = time_split.group(1).strip()
+                    parsed_rem = date_parser.parse(tail, is_deadline=False)
+                    if parsed_rem is not None:
+                        title = content[: time_split.start()].strip()
+                        if title:
+                            return IntentResolution(
+                                status=IntentStatus.VALID,
+                                intent=CommandIntent("tasks.create", (title, "", tail)),
+                                target=title,
+                                directory_index=directory_index,
+                            )
+                words = content.split()
+                if len(words) > 1 and date_parser.parse(words[-1], is_deadline=False) is not None:
+                    title = " ".join(words[:-1])
+                    return IntentResolution(
+                        status=IntentStatus.VALID,
+                        intent=CommandIntent("tasks.create", (title, "", words[-1])),
+                        target=title,
+                        directory_index=directory_index,
+                    )
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("tasks.create", (content,)),
+                    target=content,
+                    directory_index=directory_index,
+                )
+
+        # 7. Add a task to ...: e.g. "Add a task to finish my assignment tomorrow"
+        if registry.get("tasks.create"):
+            add_match = re.match(
+                r"^(?:please\s+)?(?:add|create|make)\s+(?:a\s+)?task\s+(?:to\s+)?(?P<content>.+?)[\.!]?$",
+                text,
+                re.IGNORECASE,
+            )
+            if add_match:
+                content = self.clean_quotes(add_match.group("content")).strip()
+                by_split = re.search(r"\b(?:by|due|before|on)\s+(.+)$", content, re.IGNORECASE)
+                if by_split:
+                    tail = by_split.group(1).strip()
+                    parsed_due = date_parser.parse(tail, is_deadline=True)
+                    if parsed_due is not None:
+                        title = content[: by_split.start()].strip()
+                        if title:
+                            return IntentResolution(
+                                status=IntentStatus.VALID,
+                                intent=CommandIntent("tasks.create", (title, tail)),
+                                target=title,
+                                directory_index=directory_index,
+                            )
+                words = content.split()
+                if len(words) > 1 and date_parser.parse(words[-1], is_deadline=True) is not None:
+                    title = " ".join(words[:-1])
+                    return IntentResolution(
+                        status=IntentStatus.VALID,
+                        intent=CommandIntent("tasks.create", (title, words[-1])),
+                        target=title,
+                        directory_index=directory_index,
+                    )
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("tasks.create", (content,)),
+                    target=content,
+                    directory_index=directory_index,
+                )
+
+        # 8. Complete task by ID or by title
+        if registry.get("tasks.complete"):
+            comp_id_match = re.match(
+                r"^(?:please\s+)?(?:complete|finish|mark)\s+(?:the\s+)?(?:task\s+)?(?P<id>[a-f0-9]{4,16})(?:\s+(?:as\s+)?(?:done|completed))?[\.!]?$",
+                text,
+                re.IGNORECASE,
+            )
+            if comp_id_match:
+                tid = comp_id_match.group("id")
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("tasks.complete", (tid,)),
+                    target=tid,
+                    directory_index=directory_index,
+                )
+
+            comp_title_match = re.match(
+                r"^(?:please\s+)?(?:mark\s+(?:my\s+|the\s+)?(?P<title>.+?)\s+(?:as\s+)?(?:done|completed)|complete\s+(?:the\s+|my\s+)?(?P<title2>.+?)(?:\s+task)?)[\.!]?$",
+                text,
+                re.IGNORECASE,
+            )
+            if comp_title_match:
+                raw_title = comp_title_match.group("title") or comp_title_match.group("title2")
+                clean_t = self.clean_quotes(raw_title).strip()
+                if task_manager is not None:
+                    matches = task_manager.search_tasks(clean_t, status="pending")
+                    if len(matches) == 1:
+                        return IntentResolution(
+                            status=IntentStatus.VALID,
+                            intent=CommandIntent("tasks.complete", (matches[0].id,)),
+                            target=matches[0].id,
+                            directory_index=directory_index,
+                        )
+                    elif len(matches) > 1:
+                        options = ", ".join(f"'{m.title}' (ID: {m.id})" for m in matches[:5])
+                        context.clear_pending()
+                        context.set_pending(
+                            "tasks.complete",
+                            f"Multiple matching tasks found: {options}. Which task ID would you like to mark as completed?",
+                            directory_index,
+                            argument_name="task_id",
+                        )
+                        return IntentResolution(
+                            status=IntentStatus.AMBIGUOUS,
+                            message=f"Multiple matching tasks found: {options}. Which task ID would you like to mark as completed?",
+                            directory_index=directory_index,
+                        )
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("tasks.complete", (clean_t,)),
+                    target=clean_t,
+                    directory_index=directory_index,
+                )
+
+        # 9. Cancel task by ID or title
+        if registry.get("tasks.cancel"):
+            cancel_id_match = re.match(
+                r"^(?:please\s+)?cancel\s+(?:the\s+)?(?:task\s+)?(?P<id>[a-f0-9]{4,16})[\.!]?$",
+                text,
+                re.IGNORECASE,
+            )
+            if cancel_id_match:
+                tid = cancel_id_match.group("id")
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("tasks.cancel", (tid,)),
+                    target=tid,
+                    directory_index=directory_index,
+                )
+
+            cancel_title_match = re.match(
+                r"^(?:please\s+)?cancel\s+(?:the\s+|my\s+)?(?P<title>.+?)(?:\s+task)?[\.!]?$",
+                text,
+                re.IGNORECASE,
+            )
+            if cancel_title_match:
+                raw_title = cancel_title_match.group("title")
+                clean_t = self.clean_quotes(raw_title).strip()
+                if task_manager is not None:
+                    matches = task_manager.search_tasks(clean_t, status="pending")
+                    if len(matches) == 1:
+                        return IntentResolution(
+                            status=IntentStatus.VALID,
+                            intent=CommandIntent("tasks.cancel", (matches[0].id,)),
+                            target=matches[0].id,
+                            directory_index=directory_index,
+                        )
+                    elif len(matches) > 1:
+                        options = ", ".join(f"'{m.title}' (ID: {m.id})" for m in matches[:5])
+                        context.clear_pending()
+                        context.set_pending(
+                            "tasks.cancel",
+                            f"Multiple matching tasks found: {options}. Which task ID would you like to cancel?",
+                            directory_index,
+                            argument_name="task_id",
+                        )
+                        return IntentResolution(
+                            status=IntentStatus.AMBIGUOUS,
+                            message=f"Multiple matching tasks found: {options}. Which task ID would you like to cancel?",
+                            directory_index=directory_index,
+                        )
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("tasks.cancel", (clean_t,)),
+                    target=clean_t,
+                    directory_index=directory_index,
+                )
+
+        # 10. Delete task by ID: "Delete task abc12345"
+        if registry.get("tasks.delete"):
+            del_id_match = re.match(
+                r"^(?:please\s+)?(?:delete|remove)\s+(?:the\s+)?(?:task\s+)?(?P<id>[a-f0-9]{4,16})[\.!]?$",
+                text,
+                re.IGNORECASE,
+            )
+            if del_id_match:
+                tid = del_id_match.group("id")
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("tasks.delete", (tid,)),
+                    target=tid,
+                    directory_index=directory_index,
+                )
+
+        # 11. Update deadline: "Change my assignment deadline to Friday"
+        if registry.get("tasks.update"):
+            update_match = re.match(
+                r"^(?:please\s+)?change\s+(?:the\s+)?(?:deadline|due\s+date)\s+(?:of\s+)?(?:task\s+)?(?P<target>.+?)\s+to\s+(?P<due>.+)[\.!]?$",
+                text,
+                re.IGNORECASE,
+            )
+            if update_match:
+                target_str = self.clean_quotes(update_match.group("target")).strip()
+                due_str = self.clean_quotes(update_match.group("due")).strip()
+                tid = target_str
+                if task_manager is not None and not re.match(r"^[a-f0-9]{4,16}$", target_str):
+                    matches = task_manager.search_tasks(target_str, status="pending")
+                    if len(matches) == 1:
+                        tid = matches[0].id
+                    elif len(matches) > 1:
+                        options = ", ".join(f"'{m.title}' (ID: {m.id})" for m in matches[:5])
+                        return IntentResolution(
+                            status=IntentStatus.AMBIGUOUS,
+                            message=f"Multiple matching tasks found: {options}. Which task ID would you like to update?",
+                            directory_index=directory_index,
+                        )
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("tasks.update", (tid, "", due_str)),
+                    target=tid,
+                    directory_index=directory_index,
+                )
+
+        # 12. Search / Find tasks: "Find my assignment task", "Search tasks report"
+        if registry.get("tasks.list"):
+            find_match = re.match(
+                r"^(?:please\s+)?(?:find|search\s+for|search)\s+(?:my\s+)?(?:task|tasks)\s+(?P<query>.+)[\.!]?$",
+                text,
+                re.IGNORECASE,
+            )
+            if find_match:
+                query = self.clean_quotes(find_match.group("query")).rstrip(".?!").strip()
+                if query and task_manager is not None:
+                    tasks = task_manager.search_tasks(query)
+                    if not tasks:
+                        return IntentResolution(
+                            status=IntentStatus.VALID,
+                            intent=CommandIntent("tasks.list", (query,)),
+                            directory_index=directory_index,
+                        )
+                    return IntentResolution(
+                        status=IntentStatus.VALID,
+                        intent=CommandIntent("tasks.get", (tasks[0].id,)),
+                        target=tasks[0].id,
+                        directory_index=directory_index,
+                    )
 
         return None

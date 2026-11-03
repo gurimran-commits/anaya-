@@ -10,6 +10,7 @@ from app.core.action_result import ActionResult
 if TYPE_CHECKING:
     from app.memory.memory_manager import MemoryManager
     from app.skills.skill_manager import SkillManager
+    from app.tasks.task_manager import TaskManager
 
 
 class TextAssistant:
@@ -21,11 +22,13 @@ class TextAssistant:
         executor: CommandExecutor,
         memory_manager: "MemoryManager | None" = None,
         skill_manager: "SkillManager | None" = None,
+        task_manager: "TaskManager | None" = None,
     ) -> None:
         self._registry = registry
         self._executor = executor
         self._memory_manager = memory_manager
         self._skill_manager = skill_manager
+        self._task_manager = task_manager
         if memory_manager is not None:
             from app.commands.memory_commands import register_memory_commands
 
@@ -34,6 +37,10 @@ class TextAssistant:
             from app.commands.skill_commands import register_skill_commands
 
             register_skill_commands(registry, skill_manager, executor)
+        if task_manager is not None:
+            from app.commands.task_commands import register_task_commands
+
+            register_task_commands(registry, task_manager)
         self._intent_handler = IntentHandler(registry)
         self._context = ConversationContext()
 
@@ -46,6 +53,11 @@ class TextAssistant:
     def skill_manager(self) -> "SkillManager | None":
         """Expose optional SkillManager for skill operations."""
         return self._skill_manager
+
+    @property
+    def task_manager(self) -> "TaskManager | None":
+        """Expose optional TaskManager for task operations."""
+        return self._task_manager
 
     @property
     def context(self) -> ConversationContext:
