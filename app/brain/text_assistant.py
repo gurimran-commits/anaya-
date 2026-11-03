@@ -9,6 +9,7 @@ from app.core.action_result import ActionResult
 
 if TYPE_CHECKING:
     from app.memory.memory_manager import MemoryManager
+    from app.skills.skill_manager import SkillManager
 
 
 class TextAssistant:
@@ -19,14 +20,20 @@ class TextAssistant:
         registry: CommandRegistry,
         executor: CommandExecutor,
         memory_manager: "MemoryManager | None" = None,
+        skill_manager: "SkillManager | None" = None,
     ) -> None:
         self._registry = registry
         self._executor = executor
         self._memory_manager = memory_manager
+        self._skill_manager = skill_manager
         if memory_manager is not None:
             from app.commands.memory_commands import register_memory_commands
 
             register_memory_commands(registry, memory_manager)
+        if skill_manager is not None:
+            from app.commands.skill_commands import register_skill_commands
+
+            register_skill_commands(registry, skill_manager, executor)
         self._intent_handler = IntentHandler(registry)
         self._context = ConversationContext()
 
@@ -34,6 +41,11 @@ class TextAssistant:
     def memory_manager(self) -> "MemoryManager | None":
         """Expose optional MemoryManager for memory operations."""
         return self._memory_manager
+
+    @property
+    def skill_manager(self) -> "SkillManager | None":
+        """Expose optional SkillManager for skill operations."""
+        return self._skill_manager
 
     @property
     def context(self) -> ConversationContext:

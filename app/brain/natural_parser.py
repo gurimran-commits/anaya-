@@ -299,6 +299,75 @@ class NaturalLanguageParser:
                         directory_index=directory_index,
                     )
 
+        # 7. Skills intents (if registered).
+        if registry.get("skills.list") and re.match(
+            r"^(?:what\s+skills\s+(?:are\s+available|do\s+you\s+have)|"
+            r"(?:please\s+)?(?:list|show)\s+(?:available\s+)?skills)[\.?!]?$",
+            text,
+            re.IGNORECASE,
+        ):
+            return IntentResolution(
+                status=IntentStatus.VALID,
+                intent=CommandIntent("skills.list", ()),
+                directory_index=directory_index,
+            )
+
+        if registry.get("skills.run"):
+            greet_with_skill_match = re.match(
+                r"^(?:please\s+)?greet\s+(?P<name>[\'\"][^\'\"]+[\'\"]|\S+)\s+(?:using|with)\s+(?:the\s+)?greeting\s+skill[\.!]?$",
+                text,
+                re.IGNORECASE,
+            )
+            if greet_with_skill_match:
+                name = self.clean_quotes(greet_with_skill_match.group("name")).rstrip(".?!").strip()
+                import json
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("skills.run", ("example.greeting", json.dumps({"name": name}))),
+                    target="example.greeting",
+                    directory_index=directory_index,
+                )
+
+            run_greeting_match = re.match(
+                r"^(?:please\s+)?run\s+(?:the\s+)?greeting\s+skill(?:\s+with\s+(?:name\s+)?(?P<name>.+))?[\.!]?$",
+                text,
+                re.IGNORECASE,
+            )
+            if run_greeting_match:
+                raw_name = run_greeting_match.group("name")
+                import json
+                if raw_name:
+                    name = self.clean_quotes(raw_name).rstrip(".?!").strip()
+                    payload = json.dumps({"name": name})
+                else:
+                    payload = "{}"
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("skills.run", ("example.greeting", payload)),
+                    target="example.greeting",
+                    directory_index=directory_index,
+                )
+
+            generic_skill_match = re.match(
+                r"^(?:please\s+)?run\s+(?:the\s+)?skill\s+(?P<id>\S+)(?:\s+with\s+(?P<inputs>.+))?[\.!]?$",
+                text,
+                re.IGNORECASE,
+            )
+            if generic_skill_match:
+                skill_id = self.clean_quotes(generic_skill_match.group("id")).rstrip(".?!").strip()
+                raw_inputs = generic_skill_match.group("inputs")
+                if raw_inputs:
+                    inputs_str = self.clean_quotes(raw_inputs).rstrip(".?!").strip()
+                    args = (skill_id, inputs_str)
+                else:
+                    args = (skill_id,)
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("skills.run", args),
+                    target=skill_id,
+                    directory_index=directory_index,
+                )
+
         return None
 
     def parse(
@@ -512,6 +581,79 @@ class NaturalLanguageParser:
                     status=IntentStatus.VALID,
                     intent=CommandIntent("memory.delete", (mem_id,)),
                     target=mem_id,
+                    directory_index=dir_idx,
+                )
+
+        # 6. Match Skills Operations (if registered).
+        if registry.get("skills.list"):
+            skills_list_pattern = re.compile(
+                r"^(?:what\s+skills\s+(?:are\s+available|do\s+you\s+have)|"
+                r"(?:please\s+)?(?:list|show)\s+(?:available\s+)?skills)[\.?!]?$",
+                re.IGNORECASE,
+            )
+            if skills_list_pattern.match(cleaned_text):
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("skills.list", ()),
+                    directory_index=dir_idx,
+                )
+
+        if registry.get("skills.run"):
+            # Greet <name> using the greeting skill
+            greet_with_skill_pattern = re.compile(
+                r"^(?:please\s+)?greet\s+(?P<name>[\'\"][^\'\"]+[\'\"]|\S+)\s+(?:using|with)\s+(?:the\s+)?greeting\s+skill[\.!]?$",
+                re.IGNORECASE,
+            )
+            match = greet_with_skill_pattern.match(cleaned_text)
+            if match:
+                name = self.clean_quotes(match.group("name")).rstrip(".?!").strip()
+                import json
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("skills.run", ("example.greeting", json.dumps({"name": name}))),
+                    target="example.greeting",
+                    directory_index=dir_idx,
+                )
+
+            # Run the greeting skill [with name <name>]
+            run_greeting_pattern = re.compile(
+                r"^(?:please\s+)?run\s+(?:the\s+)?greeting\s+skill(?:\s+with\s+(?:name\s+)?(?P<name>.+))?[\.!]?$",
+                re.IGNORECASE,
+            )
+            match = run_greeting_pattern.match(cleaned_text)
+            if match:
+                raw_name = match.group("name")
+                import json
+                if raw_name:
+                    name = self.clean_quotes(raw_name).rstrip(".?!").strip()
+                    payload = json.dumps({"name": name})
+                else:
+                    payload = "{}"
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("skills.run", ("example.greeting", payload)),
+                    target="example.greeting",
+                    directory_index=dir_idx,
+                )
+
+            # Generic skill invocation: "run skill <id> [with <inputs>]"
+            generic_skill_pattern = re.compile(
+                r"^(?:please\s+)?run\s+(?:the\s+)?skill\s+(?P<id>\S+)(?:\s+with\s+(?P<inputs>.+))?[\.!]?$",
+                re.IGNORECASE,
+            )
+            match = generic_skill_pattern.match(cleaned_text)
+            if match:
+                skill_id = self.clean_quotes(match.group("id")).rstrip(".?!").strip()
+                raw_inputs = match.group("inputs")
+                if raw_inputs:
+                    inputs_str = self.clean_quotes(raw_inputs).rstrip(".?!").strip()
+                    args = (skill_id, inputs_str)
+                else:
+                    args = (skill_id,)
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("skills.run", args),
+                    target=skill_id,
                     directory_index=dir_idx,
                 )
 
