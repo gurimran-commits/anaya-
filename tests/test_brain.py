@@ -11,7 +11,9 @@ from app.brain.text_assistant import TextAssistant
 from app.commands.executor import CommandExecutor
 from app.commands.filesystem import FilesystemService
 from app.commands.filesystem_commands import register_filesystem_commands
+from app.commands.memory_commands import register_memory_commands
 from app.commands.registry import CommandRegistry, CommandSpec
+from app.memory.memory_manager import MemoryManager
 from app.security.approval_service import ApprovalService
 
 
@@ -584,3 +586,268 @@ def test_quoted_filename_with_external_directory_instruction(test_env):
 def test_context_has_no_last_content_attribute():
     context = ConversationContext()
     assert not hasattr(context, "last_content")
+
+
+# -------------------------------------------------------------------------
+# 8. Memory Brain Natural Language Integration Tests
+# -------------------------------------------------------------------------
+
+@pytest.fixture
+def memory_brain_env():
+    """Environment with both filesystem and memory commands registered."""
+    import gc
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+        temp_path = Path(temp_dir).resolve()
+        fs_root = temp_path / "fs"
+        fs_root.mkdir()
+        db_path = temp_path / "brain_memory.db"
+
+        registry = CommandRegistry()
+        filesystem = FilesystemService((fs_root,))
+        register_filesystem_commands(registry, filesystem)
+
+        memory_manager = MemoryManager(db_path=db_path)
+
+        approvals = ApprovalService()
+        executor = CommandExecutor(registry, approvals)
+        assistant = TextAssistant(registry, executor, memory_manager=memory_manager)
+
+        yield {
+            "root": fs_root,
+            "registry": registry,
+            "filesystem": filesystem,
+            "memory": memory_manager,
+            "approvals": approvals,
+            "executor": executor,
+            "assistant": assistant,
+        }
+        filesystem.close()
+        memory_manager.close()
+        gc.collect()
+
+
+def test_natural_memory_remember_and_recall_workflow(memory_brain_env):
+    assistant = memory_brain_env["assistant"]
+
+    # 1. "Remember that I prefer dark mode."
+    save_res = assistant.process("Remember that I prefer dark mode.")
+    assert save_res.success
+    assert "Saved memory:" in save_res.message
+    assert "I prefer dark mode" in save_res.message
+
+    # 2. "What do you remember about me?"
+    about_res = assistant.process("What do you remember about me?")
+    assert about_res.success
+    assert "I prefer dark mode" in about_res.message
+
+    # 3. "List memories."
+    list_res = assistant.process("List memories.")
+    assert list_res.success
+    assert "I prefer dark mode" in list_res.message
+
+    # 4. "Recall my preferences."
+    recall_res = assistant.process("Recall my preferences.")
+    assert recall_res.success
+    assert "I prefer dark mode" in recall_res.message
+
+
+def test_natural_memory_search_phrasing_variations(memory_brain_env):
+    assistant = memory_brain_env["assistant"]
+
+    # Save preference
+    assistant.process("Remember that I prefer dark mode.")
+
+    for phrase in [
+        "Search memories for dark mode.",
+        "Find my memories about dark mode.",
+        "Lookup memories about dark mode.",
+        "Look up memories about dark mode.",
+        "search memories dark mode",
+    ]:
+        res = assistant.process(phrase)
+        assert res.success, f"Failed for phrase: {phrase}"
+        assert "I prefer dark mode" in res.message
+
+
+def test_natural_memory_clear_all_workflow_and_security(memory_brain_env):
+    assistant = memory_brain_env["assistant"]
+    approvals = memory_brain_env["approvals"]
+    executor = memory_brain_env["executor"]
+    memory_manager = memory_brain_env["memory"]
+
+    # Save initial memory
+    assistant.process("Remember that I prefer dark mode.")
+    assert len(memory_manager.list_memories()) == 1
+
+    # Phrasing variations must all route to memory.clear and require approval
+    clear_phrases = [
+        "Clear all memories.",
+        "Please clear all memories",
+        "Wipe all memories",
+        "Erase all memories",
+        "Forget all memories",
+    ]
+
+    for phrase in clear_phrases:
+        res = assistant.process(phrase)
+        # Clear-all must NEVER execute immediately without approval
+        assert not res.success
+        assert "Confirmation required. Confirmation ID: " in res.message
+        assert "Approve or reject this request" in res.message
+
+        conf_id = res.message.split("Confirmation ID: ")[1].split()[0]
+        req = approvals.get_request(conf_id)
+        assert req is not None
+        assert req.action == "memory.clear"
+        assert req.arguments == ()
+
+        # In-band responses must be rejected
+        for in_band in ["yes", "confirm", "approve"]:
+            reject_res = assistant.process(in_band)
+            assert not reject_res.success
+            assert "Text confirmation is disabled" in reject_res.message
+
+        # Reject the pending request to reset for next phrase test
+        approvals.reject(req)
+
+    # Now test successful out-of-band authorization for "Clear all memories."
+    res = assistant.process("Clear all memories.")
+    conf_id = res.message.split("Confirmation ID: ")[1].split()[0]
+    req = approvals.get_request(conf_id)
+
+    # Approve out-of-band
+    assert approvals.approve(req)
+    exec_res = executor.execute(req.action, req.arguments, confirmation_id=conf_id)
+    assert exec_res.success
+    assert "Cleared 1 memories." in exec_res.message
+    assert len(memory_manager.list_memories()) == 0
+
+    # Verify list memories is now empty
+    empty_list = assistant.process("List memories.")
+    assert empty_list.success
+    assert empty_list.message == "No memories stored."
+
+
+def test_natural_memory_delete_clarification_and_approval(memory_brain_env):
+    assistant = memory_brain_env["assistant"]
+    approvals = memory_brain_env["approvals"]
+    executor = memory_brain_env["executor"]
+    memory_manager = memory_brain_env["memory"]
+
+    mem = memory_manager.save_memory("Temporary configuration note")
+    mem_id = mem.id
+
+    # 1. Incomplete deletion: "Forget memory"
+    prompt_res = assistant.process("Forget memory")
+    assert not prompt_res.success
+    assert prompt_res.message == "Which memory ID would you like to delete?"
+    assert assistant.context.has_pending
+    assert assistant.context.pending_intent == "memory.delete"
+
+    # Memory must NOT be deleted during clarification
+    assert memory_manager.get_memory(mem_id) is not None
+
+    # 2. Provide the memory ID
+    id_res = assistant.process(mem_id)
+    # Providing memory ID only requests the operation; it does NOT authorize it
+    assert not id_res.success
+    assert "Confirmation required. Confirmation ID: " in id_res.message
+    assert not assistant.context.has_pending
+
+    conf_id = id_res.message.split("Confirmation ID: ")[1].split()[0]
+    req = approvals.get_request(conf_id)
+    assert req is not None
+    assert req.action == "memory.delete"
+    assert req.arguments == (mem_id,)
+
+    # In-band approval rejected
+    reject_res = assistant.process("confirm")
+    assert not reject_res.success
+    assert "Text confirmation is disabled" in reject_res.message
+
+    # Memory still exists
+    assert memory_manager.get_memory(mem_id) is not None
+
+    # Out-of-band approval
+    assert approvals.approve(req)
+    exec_res = executor.execute(req.action, req.arguments, confirmation_id=conf_id)
+    assert exec_res.success
+    assert f"Deleted memory {mem_id}" in exec_res.message
+    assert memory_manager.get_memory(mem_id) is None
+
+
+def test_natural_memory_delete_clarification_cancellation(memory_brain_env):
+    assistant = memory_brain_env["assistant"]
+
+    for cancel_phrase in ["cancel", "nevermind", "abort", "stop"]:
+        prompt_res = assistant.process("Delete memory")
+        assert not prompt_res.success
+        assert prompt_res.message == "Which memory ID would you like to delete?"
+        assert assistant.context.has_pending
+
+        cancel_res = assistant.process(cancel_phrase)
+        assert not cancel_res.success
+        assert "Action cancelled." in cancel_res.message
+        assert not assistant.context.has_pending
+
+
+def test_natural_memory_clarification_superseded_by_new_commands(memory_brain_env):
+    assistant = memory_brain_env["assistant"]
+    filesystem = memory_brain_env["filesystem"]
+
+    filesystem.create_text(0, "notes.txt", "Notes content")
+
+    # Start memory deletion clarification
+    assistant.process("Delete memory")
+    assert assistant.context.has_pending
+
+    # Supersede with a filesystem command
+    list_res = assistant.process("list files")
+    assert list_res.success
+    assert "notes.txt" in list_res.message
+    assert not assistant.context.has_pending
+
+    # Start memory deletion clarification again
+    assistant.process("Forget memory")
+    assert assistant.context.has_pending
+
+    # Supersede with memory listing
+    mem_res = assistant.process("list memories")
+    assert mem_res.success
+    assert not assistant.context.has_pending
+
+
+def test_empty_memory_list_and_search_formatting(memory_brain_env):
+    assistant = memory_brain_env["assistant"]
+
+    empty_list = assistant.process("List memories.")
+    assert empty_list.success
+    assert empty_list.message == "No memories stored."
+
+    empty_search = assistant.process("Search memories for dark mode.")
+    assert empty_search.success
+    assert empty_search.message == "No memories found matching 'dark mode'."
+
+
+def test_unrelated_filesystem_and_web_commands_not_confused_with_memory(memory_brain_env):
+    assistant = memory_brain_env["assistant"]
+    filesystem = memory_brain_env["filesystem"]
+
+    filesystem.create_text(0, "project.txt", "Project specs")
+
+    # Filesystem operations
+    fs_read = assistant.process("read project.txt")
+    assert fs_read.success
+    assert fs_read.message == "Project specs"
+
+    # Web search operations must remain unsupported
+    for web_query in [
+        "search google for python",
+        "browse the web",
+        "lookup recipes online",
+        "look up news",
+    ]:
+        web_res = assistant.process(web_query)
+        assert not web_res.success
+        assert "Web browsing and search operations are not supported" in web_res.message

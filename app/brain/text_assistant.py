@@ -1,9 +1,14 @@
+from typing import TYPE_CHECKING
+
 from app.brain.context import ConversationContext
 from app.brain.intent_handler import IntentHandler
 from app.brain.models import IntentStatus
 from app.commands.executor import CommandExecutor
 from app.commands.registry import CommandRegistry
 from app.core.action_result import ActionResult
+
+if TYPE_CHECKING:
+    from app.memory.memory_manager import MemoryManager
 
 
 class TextAssistant:
@@ -13,11 +18,22 @@ class TextAssistant:
         self,
         registry: CommandRegistry,
         executor: CommandExecutor,
+        memory_manager: "MemoryManager | None" = None,
     ) -> None:
         self._registry = registry
         self._executor = executor
+        self._memory_manager = memory_manager
+        if memory_manager is not None:
+            from app.commands.memory_commands import register_memory_commands
+
+            register_memory_commands(registry, memory_manager)
         self._intent_handler = IntentHandler(registry)
         self._context = ConversationContext()
+
+    @property
+    def memory_manager(self) -> "MemoryManager | None":
+        """Expose optional MemoryManager for memory operations."""
+        return self._memory_manager
 
     @property
     def context(self) -> ConversationContext:

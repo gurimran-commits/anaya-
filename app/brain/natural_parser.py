@@ -60,7 +60,7 @@ class NaturalLanguageParser:
         ),
         (
             re.compile(
-                r"^(?:please\s+)?(?:search|browse|google|look\s+up)\b",
+                r"^(?:please\s+)?(?:search\s+(?!memories?\b)|browse|google|look\s*up(?!\s+(?:my\s+)?memories?\b))\b",
                 re.IGNORECASE,
             ),
             (
@@ -207,6 +207,98 @@ class NaturalLanguageParser:
             if read_res is not None and read_res.status == IntentStatus.VALID:
                 return read_res
 
+        # 6. Memory intents (if registered).
+        if registry.get("memory.clear") and re.match(
+            r"^(?:please\s+)?(?:clear|wipe|erase|forget)\s+all\s+memories[\.!]?$",
+            text,
+            re.IGNORECASE,
+        ):
+            return IntentResolution(
+                status=IntentStatus.VALID,
+                intent=CommandIntent("memory.clear", ()),
+                directory_index=directory_index,
+            )
+
+        if registry.get("memory.list") and re.match(
+            r"^(?:please\s+)?(?:what\s+do\s+you\s+remember(?:\s+about\s+me)?\??|show\s+(?:all\s+|my\s+)?memories|list\s+(?:all\s+|my\s+)?memories)[\.!]?$",
+            text,
+            re.IGNORECASE,
+        ):
+            return IntentResolution(
+                status=IntentStatus.VALID,
+                intent=CommandIntent("memory.list", ()),
+                directory_index=directory_index,
+            )
+
+        if registry.get("memory.save"):
+            save_match = re.match(
+                r"^(?:please\s+)?remember\s+(?:that\s+)?(?P<content>.+)$",
+                text,
+                re.IGNORECASE,
+            )
+            if save_match:
+                content = self.clean_quotes(save_match.group("content")).strip()
+                if content:
+                    return IntentResolution(
+                        status=IntentStatus.VALID,
+                        intent=CommandIntent("memory.save", (content,)),
+                        directory_index=directory_index,
+                    )
+
+        if registry.get("memory.search"):
+            search_match = re.match(
+                r"^(?:please\s+)?(?:search\s+(?:my\s+)?memories(?:\s+(?:for|about))?\s+|"
+                r"find\s+(?:my\s+)?memories(?:\s+(?:for|about))?\s+|"
+                r"look\s*up\s+(?:my\s+)?memories(?:\s+(?:for|about))?\s+|"
+                r"recall\s+(?:my\s+)?)"
+                r"(?P<query>.+)$",
+                text,
+                re.IGNORECASE,
+            )
+            if search_match:
+                query = self.clean_quotes(search_match.group("query")).rstrip(".?!").strip()
+                if query:
+                    return IntentResolution(
+                        status=IntentStatus.VALID,
+                        intent=CommandIntent("memory.search", (query,)),
+                        directory_index=directory_index,
+                    )
+
+        if registry.get("memory.delete"):
+            if re.match(
+                r"^(?:please\s+)?(?:forget|delete|remove|erase)\s+memory[\.!]?$",
+                text,
+                re.IGNORECASE,
+            ):
+                context.clear_pending()
+                context.set_pending(
+                    "memory.delete",
+                    "Which memory ID would you like to delete?",
+                    directory_index,
+                    argument_name="memory_id",
+                )
+                return IntentResolution(
+                    status=IntentStatus.MISSING_ARGUMENT,
+                    missing_argument_name="memory_id",
+                    message="Which memory ID would you like to delete?",
+                    directory_index=directory_index,
+                )
+
+            del_match = re.match(
+                r"^(?:please\s+)?(?:forget|delete|remove|erase)\s+memory\s+(?P<id>\S+)[\.!]?$",
+                text,
+                re.IGNORECASE,
+            )
+            if del_match:
+                mem_id = self.clean_quotes(del_match.group("id")).rstrip(".?!").strip()
+                if mem_id:
+                    return IntentResolution(
+                        status=IntentStatus.VALID,
+                        intent=CommandIntent("memory.delete", (mem_id,)),
+                        target=mem_id,
+                        directory_index=directory_index,
+                    )
+
         return None
 
     def parse(
@@ -312,6 +404,117 @@ class NaturalLanguageParser:
             if delete_res is not None:
                 return delete_res
 
+        # 5. Match Memory Operations (if registered).
+        if registry.get("memory.clear"):
+            clear_pattern = re.compile(
+                r"^(?:please\s+)?(?:clear|wipe|erase|forget)\s+all\s+memories[\.!]?$",
+                re.IGNORECASE,
+            )
+            if clear_pattern.match(cleaned_text):
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("memory.clear", ()),
+                    directory_index=dir_idx,
+                )
+
+        if registry.get("memory.list"):
+            mem_list_pattern = re.compile(
+                r"^(?:please\s+)?(?:what\s+do\s+you\s+remember(?:\s+about\s+me)?\??|"
+                r"show\s+(?:all\s+|my\s+)?memories|"
+                r"list\s+(?:all\s+|my\s+)?memories)[\.!]?$",
+                re.IGNORECASE,
+            )
+            if mem_list_pattern.match(cleaned_text):
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("memory.list", ()),
+                    directory_index=dir_idx,
+                )
+
+        if registry.get("memory.save"):
+            mem_save_pattern = re.compile(
+                r"^(?:please\s+)?remember\s+(?:that\s+)?(?P<content>.+)$",
+                re.IGNORECASE,
+            )
+            match = mem_save_pattern.match(cleaned_text)
+            if match:
+                content = self.clean_quotes(match.group("content")).strip()
+                if not content:
+                    return IntentResolution(
+                        status=IntentStatus.INVALID,
+                        message="Please specify the content to remember.",
+                    )
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("memory.save", (content,)),
+                    directory_index=dir_idx,
+                )
+
+        if registry.get("memory.search"):
+            mem_search_pattern = re.compile(
+                r"^(?:please\s+)?(?:search\s+(?:my\s+)?memories(?:\s+(?:for|about))?\s+|"
+                r"find\s+(?:my\s+)?memories(?:\s+(?:for|about))?\s+|"
+                r"look\s*up\s+(?:my\s+)?memories(?:\s+(?:for|about))?\s+|"
+                r"recall\s+(?:my\s+)?)"
+                r"(?P<query>.+)$",
+                re.IGNORECASE,
+            )
+            match = mem_search_pattern.match(cleaned_text)
+            if match:
+                query = self.clean_quotes(match.group("query")).rstrip(".?!").strip()
+                if query:
+                    return IntentResolution(
+                        status=IntentStatus.VALID,
+                        intent=CommandIntent("memory.search", (query,)),
+                        directory_index=dir_idx,
+                    )
+
+        if registry.get("memory.delete"):
+            missing_del_pattern = re.compile(
+                r"^(?:please\s+)?(?:forget|delete|remove|erase)\s+memory[\.!]?$",
+                re.IGNORECASE,
+            )
+            if missing_del_pattern.match(cleaned_text):
+                context.set_pending(
+                    "memory.delete",
+                    "Which memory ID would you like to delete?",
+                    dir_idx,
+                    argument_name="memory_id",
+                )
+                return IntentResolution(
+                    status=IntentStatus.MISSING_ARGUMENT,
+                    missing_argument_name="memory_id",
+                    message="Which memory ID would you like to delete?",
+                    directory_index=dir_idx,
+                )
+
+            mem_del_pattern = re.compile(
+                r"^(?:please\s+)?(?:forget|delete|remove|erase)\s+memory\s+(?P<id>\S+)[\.!]?$",
+                re.IGNORECASE,
+            )
+            match = mem_del_pattern.match(cleaned_text)
+            if match:
+                mem_id = self.clean_quotes(match.group("id")).rstrip(".?!").strip()
+                if not mem_id:
+                    context.set_pending(
+                        "memory.delete",
+                        "Which memory ID would you like to delete?",
+                        dir_idx,
+                        argument_name="memory_id",
+                    )
+                    return IntentResolution(
+                        status=IntentStatus.MISSING_ARGUMENT,
+                        missing_argument_name="memory_id",
+                        message="Which memory ID would you like to delete?",
+                        directory_index=dir_idx,
+                    )
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("memory.delete", (mem_id,)),
+                    target=mem_id,
+                    directory_index=dir_idx,
+                )
+
         # If no natural language pattern matched, return unsupported/unrecognized.
         return IntentResolution(
             status=IntentStatus.UNSUPPORTED,
@@ -381,6 +584,21 @@ class NaturalLanguageParser:
             return IntentResolution(
                 status=IntentStatus.INVALID,
                 message="Arguments provided for file creation are invalid.",
+            )
+
+        if pending_intent == "memory.delete":
+            clean_arg = argument.rstrip(".?!").strip()
+            intent = CommandIntent(pending_intent, (clean_arg,))
+            if registry.validate(intent.name, intent.arguments):
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=intent,
+                    target=clean_arg,
+                    directory_index=dir_idx,
+                )
+            return IntentResolution(
+                status=IntentStatus.INVALID,
+                message=f"Memory ID '{clean_arg}' is invalid.",
             )
 
         return None
@@ -674,6 +892,10 @@ class NaturalLanguageParser:
                     message="Which file would you like to delete? Please specify the filename.",
                     directory_index=directory_index,
                 )
+
+            # Do not intercept memory deletion or clear commands as file operations.
+            if name.casefold() in {"memory", "memories", "all memories"} or name.casefold().startswith("memory "):
+                return None
 
             return IntentResolution(
                 status=IntentStatus.VALID,
