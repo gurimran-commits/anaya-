@@ -1,4 +1,3 @@
-
 from dataclasses import dataclass
 
 
@@ -21,6 +20,11 @@ class AppConfig:
     # Interaction settings.
     push_to_talk: bool = True
     require_confirmation: bool = True
+
+    # Local AI settings.
+    ai_enabled: bool = True
+    ai_provider: str = "ollama"
+    ai_profile: str = "balanced"
 
 
 DEFAULT_CONFIG = AppConfig()

@@ -12,6 +12,13 @@ def test_push_to_talk_is_enabled():
 def test_confirmation_is_required():
     assert DEFAULT_CONFIG.require_confirmation is True
 
+
 def test_app_identity():
     assert DEFAULT_CONFIG.app_name == "Anaya"
     assert DEFAULT_CONFIG.version == "0.1.0"
+
+
+def test_ai_configuration_defaults():
+    assert DEFAULT_CONFIG.ai_enabled is True
+    assert DEFAULT_CONFIG.ai_provider == "ollama"
+    assert DEFAULT_CONFIG.ai_profile == "balanced"
