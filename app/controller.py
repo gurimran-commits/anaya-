@@ -66,6 +66,12 @@ class AssistantController:
         return self._runtime.is_running
 
     @property
+    def is_cleanly_stopped(self) -> bool:
+        """Return True if controller and all subsystems cleanly stopped."""
+        with self._lock:
+            return self._cleanly_stopped
+
+    @property
     def config(self) -> AppConfig:
         """Return current application configuration."""
         return self._config
@@ -255,6 +261,15 @@ class AssistantController:
                 if len(cleanup_errors) == 1:
                     raise cleanup_errors[0]
                 raise RuntimeError(f"Multiple cleanup failures during shutdown: {cleanup_errors}")
+
+            # If scheduler worker is still active, runtime.stop() deferred TaskStore close.
+            # Controller is terminal but cannot be marked cleanly stopped until worker exits.
+            scheduler = getattr(self._runtime, "scheduler", None)
+            if scheduler is not None and getattr(scheduler, "is_running", False):
+                logger.warning(
+                    "AssistantController stop incomplete: scheduler worker still running; TaskStore preserved open."
+                )
+                return
 
             self._cleanly_stopped = True
             logger.info("AssistantController stopped cleanly.")

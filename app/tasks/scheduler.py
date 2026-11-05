@@ -60,6 +60,8 @@ class TaskScheduler:
         """Signal worker thread to stop and wait for termination."""
         with self._lock:
             if not self.is_running:
+                if self._worker_thread is not None and not self._worker_thread.is_alive():
+                    self._worker_thread = None
                 return
 
             self._stop_event.set()
