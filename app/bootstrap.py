@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Mapping
 
 from app.ai.manager import ModelManager
 from app.ai.models import HardwareProfile, ModelSettings
@@ -43,6 +43,7 @@ def create_controller(
     memory_db_path: Path | str | None = None,
     tasks_db_path: Path | str | None = None,
     allowed_directories: tuple[Path, ...] | None = None,
+    skill_permission_grants: Mapping[str, tuple[str, ...]] | None = None,
     enable_speech: bool = True,
     enable_ai: bool = True,
     custom_recorder: AudioRecorder | None = None,
@@ -97,8 +98,16 @@ def create_controller(
         initialized_memory_manager = MemoryManager(db_path=memory_db_path)
 
         # 3. Skills Subsystem
-        # Explicitly inject the shared ApprovalService into SkillManager.
-        skill_manager = SkillManager(approval_service=shared_approval_service)
+        # Explicitly inject the shared ApprovalService and permission grants into SkillManager.
+        effective_grants = (
+            effective_config.skill_permission_grants
+            if skill_permission_grants is None
+            else skill_permission_grants
+        )
+        skill_manager = SkillManager(
+            approval_service=shared_approval_service,
+            skill_permission_grants=effective_grants,
+        )
 
         # 4. Local AI Subsystem (Lazy)
         # Does not connect or load models during bootstrap.

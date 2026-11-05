@@ -1,6 +1,7 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-from app.skills.models import Skill, SkillMetadata, SkillResult
+from app.skills.models import Skill, SkillMetadata, SkillPermission, SkillResult
 
 if TYPE_CHECKING:
     from app.security.approval_service import ApprovalService
@@ -16,6 +17,7 @@ class SkillManager:
         registry: "SkillRegistry | None" = None,
         executor: "SkillExecutor | None" = None,
         approval_service: "ApprovalService | None" = None,
+        skill_permission_grants: Mapping[str, tuple[str, ...]] | None = None,
     ) -> None:
         if registry is None:
             from app.skills.skill_registry import SkillRegistry
@@ -25,7 +27,11 @@ class SkillManager:
         if executor is None:
             from app.skills.skill_executor import SkillExecutor
 
-            executor = SkillExecutor(registry=registry, approval_service=approval_service)
+            executor = SkillExecutor(
+                registry=registry,
+                approval_service=approval_service,
+                skill_permission_grants=skill_permission_grants,
+            )
 
         self._registry = registry
         self._executor = executor
@@ -39,6 +45,10 @@ class SkillManager:
     def executor(self) -> "SkillExecutor":
         """Expose the underlying executor."""
         return self._executor
+
+    def get_granted_permissions(self, skill_id: str) -> frozenset[SkillPermission]:
+        """Return the granted permissions for a specific skill ID."""
+        return self._executor.get_granted_permissions(skill_id)
 
     def register_skill(self, skill: Skill) -> None:
         """Register a new trusted skill."""

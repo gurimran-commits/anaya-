@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 import copy
 import json
 import logging
@@ -14,15 +15,35 @@ logger = logging.getLogger("anaya.skills")
 
 
 class SkillExecutor:
-    """Execute registered skills under strict validation, permissions, and isolation."""
+    """Execute registered skills under strict validation, permissions, and isolation.
+
+    Security Note:
+        Permissions act as application-level execution gates and authorization checks.
+        They do NOT provide operating system, process, or Python runtime sandboxing;
+        all registered skills run in-process as trusted Python code.
+    """
 
     def __init__(
         self,
         registry: "SkillRegistry",
         approval_service: "ApprovalService | None" = None,
+        skill_permission_grants: Mapping[str, tuple[str, ...]] | None = None,
     ) -> None:
         self._registry = registry
         self._approval_service = approval_service
+        self._skill_permission_grants: dict[str, frozenset[SkillPermission]] = {}
+        if skill_permission_grants:
+            for s_id, perms in skill_permission_grants.items():
+                parsed_perms: set[SkillPermission] = set()
+                for p in perms:
+                    if isinstance(p, SkillPermission):
+                        parsed_perms.add(p)
+                    elif isinstance(p, str):
+                        try:
+                            parsed_perms.add(SkillPermission(p.strip().lower()))
+                        except ValueError:
+                            pass
+                self._skill_permission_grants[s_id.strip()] = frozenset(parsed_perms)
 
     @property
     def registry(self) -> "SkillRegistry":
@@ -33,6 +54,17 @@ class SkillExecutor:
     def approval_service(self) -> "ApprovalService | None":
         """Access the configured ApprovalService."""
         return self._approval_service
+
+    @property
+    def skill_permission_grants(self) -> dict[str, frozenset[SkillPermission]]:
+        """Return a copy of the configured skill permission grants."""
+        return dict(self._skill_permission_grants)
+
+    def get_granted_permissions(self, skill_id: str) -> frozenset[SkillPermission]:
+        """Return the runtime capability permissions granted to a specific skill ID."""
+        if not isinstance(skill_id, str):
+            return frozenset()
+        return self._skill_permission_grants.get(skill_id.strip(), frozenset())
 
     def validate_inputs(
         self,
@@ -115,7 +147,28 @@ class SkillExecutor:
                 message=val_error or "Input validation failed.",
             )
 
-        # 4. Check permissions and out-of-band approval
+        # 4. Check runtime capability permission grants (fail-closed execution gate)
+        # Capabilities requiring explicit runtime grants are non-NONE, non-APPROVAL permissions.
+        required_capabilities = {
+            perm
+            for perm in skill.metadata.required_permissions
+            if perm not in (SkillPermission.NONE, SkillPermission.APPROVAL_REQUIRED)
+        }
+        if required_capabilities:
+            granted_capabilities = self.get_granted_permissions(clean_id)
+            missing = required_capabilities - granted_capabilities
+            if missing:
+                missing_str = ", ".join(sorted(p.value for p in missing))
+                return SkillResult(
+                    success=False,
+                    error="permission_denied",
+                    message=(
+                        f"Skill '{clean_id}' requires permission(s) not granted by "
+                        f"runtime configuration: {missing_str}."
+                    ),
+                )
+
+        # 5. Check permissions and out-of-band approval
         requires_approval = (
             skill.metadata.requires_approval
             or SkillPermission.APPROVAL_REQUIRED in skill.metadata.required_permissions
@@ -172,7 +225,7 @@ class SkillExecutor:
                     message="Invalid, expired, or unauthorized confirmation ID.",
                 )
 
-        # 5. Invoke skill implementation with complete exception isolation
+        # 6. Invoke skill implementation with complete exception isolation
         try:
             result = skill.execute(validated_inputs)
             if isinstance(result, SkillResult):

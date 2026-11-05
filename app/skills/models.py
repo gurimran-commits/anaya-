@@ -4,7 +4,13 @@ from typing import Any
 
 
 class SkillPermission(str, Enum):
-    """Permissions a skill may declare or require."""
+    """Permissions a skill may declare or require.
+
+    Security Note:
+        Permissions act as application-level execution gates and authorization checks
+        enforced by SkillExecutor. They do NOT provide operating system, process,
+        or Python runtime memory sandboxing; all skills run in-process as trusted code.
+    """
 
     NONE = "none"
     READ_ONLY = "read_only"
