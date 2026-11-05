@@ -16,6 +16,8 @@ def register_task_commands(
 ) -> None:
     """Register task CRUD, listing, completion, and deletion commands."""
     setattr(registry, "_task_manager", manager)
+    if registry.get("tasks.create") is not None:
+        return
 
     def create_task(*args: str) -> str:
         title = args[0]
@@ -78,14 +80,23 @@ def register_task_commands(
         title = args[0] if len(args) > 0 and args[0].strip() else None
         due_date = args[1] if len(args) > 1 and args[1].strip() else None
         priority = args[2] if len(args) > 2 and args[2].strip() else None
+        reminder_at = args[3] if len(args) > 3 and args[3].strip() else None
 
         task = manager.update_task(
             task_id=task_id,
             title=title,
             due_date=due_date,
             priority=priority,
+            reminder_at=reminder_at,
         )
-        return f"Updated task '{task.title}' (ID: {task.id})"
+        parts = [f"Updated task '{task.title}' (ID: {task.id})"]
+        if task.due_date:
+            parts.append(f"Due: {task.due_date.strftime('%Y-%m-%d %H:%M UTC')}")
+        if task.reminder_at:
+            parts.append(f"Reminder: {task.reminder_at.strftime('%Y-%m-%d %H:%M UTC')}")
+        elif reminder_at and reminder_at.strip().lower() in {"none", "cancel", "clear", "remove"}:
+            parts.append("Reminder cleared")
+        return " | ".join(parts)
 
     def complete_task(task_id: str) -> str:
         task = manager.complete_task(task_id)

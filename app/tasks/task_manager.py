@@ -133,13 +133,52 @@ class TaskManager:
             raise TaskNotFoundError(f"Task with ID '{task_id.strip()}' not found.")
         return task
 
+    def list_upcoming_tasks(self, now: datetime | None = None) -> list[Task]:
+        """List pending tasks with future deadlines."""
+        ref = now or self._now()
+        tasks = self._store.list_tasks(status="pending")
+        return [t for t in tasks if t.due_date is not None and t.due_date >= ref]
+
+    def list_overdue_tasks(self, now: datetime | None = None) -> list[Task]:
+        """List pending tasks whose deadline has passed."""
+        ref = now or self._now()
+        tasks = self._store.list_tasks(status="pending")
+        return [t for t in tasks if t.due_date is not None and t.due_date < ref]
+
+    def list_tasks_due_today(self, now: datetime | None = None) -> list[Task]:
+        """List pending tasks due on today's calendar date in the local reference timezone."""
+        ref = now or self._now()
+        target_tz = ref.tzinfo or self._date_parser.default_tz
+        ref_local = ref.astimezone(target_tz)
+        today_date = ref_local.date()
+        tasks = self._store.list_tasks(status="pending")
+        return [
+            t
+            for t in tasks
+            if t.due_date is not None
+            and t.due_date.astimezone(target_tz).date() == today_date
+        ]
+
     def list_tasks(
         self,
         status: str | None = None,
         priority: str | None = None,
     ) -> list[Task]:
         """List tasks matching optional status and priority criteria."""
-        return self._store.list_tasks(status=status, priority=priority)
+        norm_status = status.strip().lower() if status else None
+        if norm_status == "overdue":
+            res = self.list_overdue_tasks()
+        elif norm_status == "today":
+            res = self.list_tasks_due_today()
+        elif norm_status == "upcoming":
+            res = self.list_upcoming_tasks()
+        else:
+            return self._store.list_tasks(status=status, priority=priority)
+
+        if priority:
+            p_val = priority.strip().lower()
+            res = [t for t in res if t.priority.lower() == p_val]
+        return res
 
     def search_tasks(
         self,
@@ -160,10 +199,13 @@ class TaskManager:
         reminder_at: datetime | str | None = None,
         priority: str | None = None,
         status: str | None = None,
+        clear_reminder: bool = False,
+        clear_due_date: bool = False,
     ) -> Task:
         """Update fields on an existing task.
 
         If reminder_at is updated, reminder_triggered is reset to False.
+        Supplying 'none', 'clear', or 'cancel' clears the deadline or reminder.
         """
         existing = self.get_task(task_id)
         now = self._now()
@@ -176,22 +218,30 @@ class TaskManager:
             description.strip() if description is not None else existing.description
         )
 
-        new_due = (
-            self._parse_datetime(due_date, is_deadline=True)
-            if due_date is not None
-            else existing.due_date
-        )
+        # Handle due date update or clearing
+        if clear_due_date or (
+            isinstance(due_date, str)
+            and due_date.strip().lower() in {"none", "clear", "remove", "cancel"}
+        ):
+            new_due = None
+        elif due_date is not None:
+            new_due = self._parse_datetime(due_date, is_deadline=True)
+        else:
+            new_due = existing.due_date
 
-        new_reminder = (
-            self._parse_datetime(reminder_at, is_deadline=False)
-            if reminder_at is not None
-            else existing.reminder_at
-        )
-
-        # Reset reminder delivery state if reminder time changed
-        new_triggered = (
-            False if reminder_at is not None else existing.reminder_triggered
-        )
+        # Handle reminder update or clearing
+        if clear_reminder or (
+            isinstance(reminder_at, str)
+            and reminder_at.strip().lower() in {"none", "clear", "remove", "cancel"}
+        ):
+            new_reminder = None
+            new_triggered = False
+        elif reminder_at is not None:
+            new_reminder = self._parse_datetime(reminder_at, is_deadline=False)
+            new_triggered = False
+        else:
+            new_reminder = existing.reminder_at
+            new_triggered = existing.reminder_triggered
 
         new_priority = (
             TaskPriority.from_str(priority).value

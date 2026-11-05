@@ -65,8 +65,15 @@ class TaskScheduler:
             self._stop_event.set()
             if self._worker_thread is not None:
                 self._worker_thread.join(timeout=timeout)
-                self._worker_thread = None
-            logger.info("TaskScheduler background worker stopped.")
+                if not self._worker_thread.is_alive():
+                    self._worker_thread = None
+                else:
+                    logger.warning(
+                        "TaskScheduler worker thread %s did not terminate within timeout %.1fs.",
+                        self._worker_thread.name,
+                        timeout,
+                    )
+            logger.info("TaskScheduler background worker stop requested.")
 
     def run_pending(self, now: datetime | None = None) -> int:
         """Synchronously check and dispatch due reminders.

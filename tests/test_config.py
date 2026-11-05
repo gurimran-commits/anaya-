@@ -22,3 +22,9 @@ def test_ai_configuration_defaults():
     assert DEFAULT_CONFIG.ai_enabled is True
     assert DEFAULT_CONFIG.ai_provider == "ollama"
     assert DEFAULT_CONFIG.ai_profile == "balanced"
+
+
+def test_task_configuration_defaults():
+    assert DEFAULT_CONFIG.task_scheduling_enabled is True
+    assert DEFAULT_CONFIG.task_scheduler_poll_interval == 15.0
+    assert DEFAULT_CONFIG.task_recover_missed_reminders is True

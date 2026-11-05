@@ -26,5 +26,10 @@ class AppConfig:
     ai_provider: str = "ollama"
     ai_profile: str = "balanced"
 
+    # Task & reminder settings.
+    task_scheduling_enabled: bool = True
+    task_scheduler_poll_interval: float = 15.0
+    task_recover_missed_reminders: bool = True
+
 
 DEFAULT_CONFIG = AppConfig()

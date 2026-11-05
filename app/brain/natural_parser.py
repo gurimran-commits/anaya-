@@ -1189,6 +1189,50 @@ class NaturalLanguageParser:
 
         # 5. List tasks
         if registry.get("tasks.list"):
+            # Overdue tasks
+            if re.match(
+                r"^(?:please\s+)?(?:show|list|view|display|what\s+are)\s+(?:all\s+|my\s+)?overdue\s+tasks?[\.?!]?$",
+                text,
+                re.IGNORECASE,
+            ) or re.match(
+                r"^what\s+tasks\s+(?:are\s+overdue|past\s+due)[\.?!]?$",
+                text,
+                re.IGNORECASE,
+            ):
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("tasks.list", ("overdue",)),
+                    directory_index=directory_index,
+                )
+
+            # Due today tasks
+            if re.match(
+                r"^(?:please\s+)?(?:show|list|view|display)\s+(?:all\s+|my\s+)?tasks?\s+(?:due\s+today|for\s+today)[\.?!]?$",
+                text,
+                re.IGNORECASE,
+            ) or re.match(
+                r"^what\s+tasks\s+(?:are|do\s+i\s+have)\s+due\s+today[\.?!]?$",
+                text,
+                re.IGNORECASE,
+            ):
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("tasks.list", ("today",)),
+                    directory_index=directory_index,
+                )
+
+            # Upcoming tasks
+            if re.match(
+                r"^(?:please\s+)?(?:show|list|view|display|what\s+are)\s+(?:all\s+|my\s+)?upcoming\s+tasks?[\.?!]?$",
+                text,
+                re.IGNORECASE,
+            ):
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("tasks.list", ("upcoming",)),
+                    directory_index=directory_index,
+                )
+
             # Completed tasks
             if re.match(
                 r"^(?:please\s+)?(?:show|list|view|display)\s+(?:all\s+|my\s+)?completed\s+tasks?[\.?!]?$",
@@ -1347,6 +1391,75 @@ class NaturalLanguageParser:
                     directory_index=directory_index,
                 )
 
+        # 8b. Cancel reminder: "Cancel the reminder for my assignment", "Remove reminder for task 1234abcd"
+        if registry.get("tasks.update"):
+            cancel_rem_match = re.match(
+                r"^(?:please\s+)?(?:cancel|remove|delete|clear)\s+(?:the\s+)?reminder\s+(?:for|on|of)\s+(?:the\s+|my\s+)?(?P<target>.+?)(?:\s+task)?[\.!]?$",
+                text,
+                re.IGNORECASE,
+            )
+            if cancel_rem_match:
+                target_str = self.clean_quotes(cancel_rem_match.group("target")).strip()
+                tid = target_str
+                if task_manager is not None and not re.match(r"^[a-f0-9]{4,16}$", target_str):
+                    matches = task_manager.search_tasks(target_str, status="pending")
+                    if len(matches) == 1:
+                        tid = matches[0].id
+                    elif len(matches) > 1:
+                        options = ", ".join(f"'{m.title}' (ID: {m.id})" for m in matches[:5])
+                        return IntentResolution(
+                            status=IntentStatus.AMBIGUOUS,
+                            message=f"Multiple matching tasks found: {options}. Which task ID reminder would you like to cancel?",
+                            directory_index=directory_index,
+                        )
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("tasks.update", (tid, "", "", "", "none")),
+                    target=tid,
+                    directory_index=directory_index,
+                )
+
+        # 8c. Set / update reminder for task: "Set a reminder for my assignment at 6 PM"
+        if registry.get("tasks.update"):
+            set_rem_match = re.match(
+                r"^(?:please\s+)?(?:set|add|update)\s+(?:a\s+)?reminder\s+(?:for|on)\s+(?:the\s+|my\s+)?(?P<target>.+?)\s+(?:at|to|for|on)\s+(?P<rem>.+)[\.!]?$",
+                text,
+                re.IGNORECASE,
+            )
+            if set_rem_match:
+                target_str = self.clean_quotes(set_rem_match.group("target")).strip()
+                rem_str = self.clean_quotes(set_rem_match.group("rem")).strip()
+                if date_parser.parse(rem_str, is_deadline=False) is None:
+                    return IntentResolution(
+                        status=IntentStatus.INVALID,
+                        message=f"Could not parse '{rem_str}' as a valid date or time.",
+                        directory_index=directory_index,
+                    )
+                tid = target_str
+                if task_manager is not None and not re.match(r"^[a-f0-9]{4,16}$", target_str):
+                    matches = task_manager.search_tasks(target_str, status="pending")
+                    if len(matches) == 1:
+                        tid = matches[0].id
+                        return IntentResolution(
+                            status=IntentStatus.VALID,
+                            intent=CommandIntent("tasks.update", (tid, "", "", "", rem_str)),
+                            target=tid,
+                            directory_index=directory_index,
+                        )
+                    elif len(matches) > 1:
+                        options = ", ".join(f"'{m.title}' (ID: {m.id})" for m in matches[:5])
+                        return IntentResolution(
+                            status=IntentStatus.AMBIGUOUS,
+                            message=f"Multiple matching tasks found: {options}. Which task ID would you like to set a reminder for?",
+                            directory_index=directory_index,
+                        )
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("tasks.update", (tid, "", "", "", rem_str)),
+                    target=tid,
+                    directory_index=directory_index,
+                )
+
         # 9. Cancel task by ID or title
         if registry.get("tasks.cancel"):
             cancel_id_match = re.match(
@@ -1364,7 +1477,7 @@ class NaturalLanguageParser:
                 )
 
             cancel_title_match = re.match(
-                r"^(?:please\s+)?cancel\s+(?:the\s+|my\s+)?(?P<title>.+?)(?:\s+task)?[\.!]?$",
+                r"^(?:please\s+)?cancel\s+(?:the\s+|my\s+)?(?!reminder\b)(?P<title>.+?)(?:\s+task)?[\.!]?$",
                 text,
                 re.IGNORECASE,
             )
@@ -1417,16 +1530,22 @@ class NaturalLanguageParser:
                     directory_index=directory_index,
                 )
 
-        # 11. Update deadline: "Change my assignment deadline to Friday"
+        # 11. Update deadline: "Change my assignment deadline to Friday", "Move my assignment deadline to tomorrow"
         if registry.get("tasks.update"):
             update_match = re.match(
-                r"^(?:please\s+)?change\s+(?:the\s+)?(?:deadline|due\s+date)\s+(?:of\s+)?(?:task\s+)?(?P<target>.+?)\s+to\s+(?P<due>.+)[\.!]?$",
+                r"^(?:please\s+)?(?:change|move|reschedule|postpone|update)\s+(?:the\s+)?(?:deadline|due\s+date)\s+(?:of|for)?\s*(?:task\s+)?(?P<target>.+?)\s+to\s+(?P<due>.+)[\.!]?$",
                 text,
                 re.IGNORECASE,
             )
             if update_match:
                 target_str = self.clean_quotes(update_match.group("target")).strip()
                 due_str = self.clean_quotes(update_match.group("due")).strip()
+                if date_parser.parse(due_str, is_deadline=True) is None:
+                    return IntentResolution(
+                        status=IntentStatus.INVALID,
+                        message=f"Could not parse '{due_str}' as a valid date or time.",
+                        directory_index=directory_index,
+                    )
                 tid = target_str
                 if task_manager is not None and not re.match(r"^[a-f0-9]{4,16}$", target_str):
                     matches = task_manager.search_tasks(target_str, status="pending")
