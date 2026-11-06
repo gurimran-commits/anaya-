@@ -634,14 +634,50 @@ def test_single_use_runner_lifecycle() -> None:
 
 
 def test_cli_desktop_routing() -> None:
-    """The --desktop flag correctly routes to DesktopApplicationRunner.run()."""
+    """The --desktop flag correctly routes to DesktopApplicationRunner with desktop and hotkeys enabled."""
     parsed = parse_args(["--desktop"])
     assert parsed.desktop is True
 
-    with patch("app.desktop.runner.DesktopApplicationRunner.run", return_value=0) as mock_run:
+    captured_configs: list[AppConfig] = []
+
+    with patch("app.desktop.runner.DesktopApplicationRunner") as mock_runner_cls:
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = 0
+
+        def _capture_init(*args: Any, **kwargs: Any) -> MagicMock:
+            if "config" in kwargs and kwargs["config"] is not None:
+                captured_configs.append(kwargs["config"])
+            return mock_instance
+
+        mock_runner_cls.side_effect = _capture_init
+
         code = main(argv=["--desktop"])
         assert code == 0
-        assert mock_run.called
+        assert mock_runner_cls.called
+        assert mock_instance.run.called
+        assert len(captured_configs) == 1
+        cfg = captured_configs[0]
+        assert cfg.desktop_enabled is True
+        assert cfg.hotkey_enabled is True
+        assert cfg.hotkey_combination == "win+alt+a"
+
+
+def test_normal_cli_does_not_initialize_desktop_or_hotkeys() -> None:
+    """Normal CLI execution runs the text REPL and does not initialize DesktopApplicationRunner."""
+    mock_ctrl = MagicMock()
+    mock_ctrl.start.return_value = None
+    mock_ctrl.stop.return_value = None
+
+    with patch("app.main.create_controller", return_value=mock_ctrl), \
+         patch("app.desktop.runner.DesktopApplicationRunner") as mock_runner_cls:
+
+        code = main(
+            argv=[],
+            input_fn=lambda prompt: "exit",
+            print_fn=lambda *args: None,
+        )
+        assert code == 0
+        assert not mock_runner_cls.called
 
 
 def test_controller_returns_none_startup_success() -> None:

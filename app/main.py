@@ -90,9 +90,11 @@ def main(
 
     if args.desktop:
         try:
+            from app.core.config import AppConfig
             from app.desktop.runner import DesktopApplicationRunner
 
-            runner = DesktopApplicationRunner()
+            config = AppConfig(desktop_enabled=True, hotkey_enabled=True)
+            runner = DesktopApplicationRunner(config=config)
             return runner.run()
         except Exception as exc:
             logger.error("Desktop application fatal error (%s): %s", type(exc).__name__, exc, exc_info=True)
