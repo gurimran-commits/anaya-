@@ -7,7 +7,10 @@ ApprovalService across commands and skills, and returns a fully wired AssistantC
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
+import shutil
+import sys
 from typing import TYPE_CHECKING, Callable, Mapping
 
 from app.ai.manager import ModelManager
@@ -38,6 +41,166 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def resolve_whisper_paths(
+    executable_path: str | Path | None = None,
+    model_path: str | Path | None = None,
+) -> tuple[Path | None, Path | None]:
+    """Resolve Whisper.cpp executable and model paths from params, env vars, or standard locations."""
+    resolved_exe: Path | None = None
+    resolved_model: Path | None = None
+    repo_root = Path(__file__).resolve().parents[1]
+
+    # 1. Resolve Executable
+    if executable_path is not None:
+        p = Path(executable_path).expanduser().resolve()
+        if p.is_file():
+            resolved_exe = p
+    elif env_exe := (os.environ.get("ANAYA_WHISPER_BIN") or os.environ.get("WHISPER_CPP_BIN") or os.environ.get("WHISPER_BIN")):
+        p = Path(env_exe).expanduser().resolve()
+        if p.is_file():
+            resolved_exe = p
+    else:
+        is_windows = sys.platform == "win32"
+        exe_name = "whisper-cli.exe" if is_windows else "whisper-cli"
+        legacy_exe_name = "main.exe" if is_windows else "main"
+
+        # Check candidate paths relative to repo root
+        candidates = [
+            repo_root.parent / "whisper.cpp" / "build" / "bin" / "Release" / exe_name,
+            repo_root.parent / "whisper.cpp" / "build" / "bin" / exe_name,
+            repo_root / "bin" / exe_name,
+            Path.home() / ".anaya" / "bin" / exe_name,
+            repo_root.parent / "whisper.cpp" / "build" / "bin" / "Release" / legacy_exe_name,
+            repo_root.parent / "whisper.cpp" / "build" / "bin" / legacy_exe_name,
+            repo_root.parent / "whisper.cpp" / legacy_exe_name,
+        ]
+        for c in candidates:
+            if c.is_file():
+                resolved_exe = c.resolve()
+                break
+
+        # Fall back to PATH search for whisper-cli or whisper
+        if resolved_exe is None:
+            for bin_name in ("whisper-cli", "whisper"):
+                if which_exe := shutil.which(bin_name):
+                    p = Path(which_exe).resolve()
+                    if p.is_file() and (not is_windows or p.suffix.lower() == ".exe"):
+                        resolved_exe = p
+                        break
+
+    # 2. Resolve Model
+    if model_path is not None:
+        p = Path(model_path).expanduser().resolve()
+        if p.is_file():
+            resolved_model = p
+    elif env_model := (os.environ.get("ANAYA_WHISPER_MODEL") or os.environ.get("WHISPER_CPP_MODEL") or os.environ.get("WHISPER_MODEL")):
+        p = Path(env_model).expanduser().resolve()
+        if p.is_file():
+            resolved_model = p
+    else:
+        candidates = [
+            repo_root / "models" / "whisper" / "ggml-base.en.bin",
+            repo_root / "models" / "whisper" / "ggml-base.bin",
+            repo_root / "models" / "whisper" / "ggml-tiny.en.bin",
+            repo_root / "models" / "whisper" / "ggml-tiny.bin",
+            Path.home() / ".anaya" / "models" / "whisper" / "ggml-base.en.bin",
+            repo_root.parent / "whisper.cpp" / "models" / "ggml-base.en.bin",
+        ]
+        for c in candidates:
+            if c.is_file():
+                resolved_model = c.resolve()
+                break
+
+        if resolved_model is None:
+            whisper_dir = repo_root / "models" / "whisper"
+            if whisper_dir.is_dir():
+                for ext in ("*.bin", "*.gguf"):
+                    found = list(whisper_dir.glob(ext))
+                    if found:
+                        resolved_model = found[0].resolve()
+                        break
+
+    return resolved_exe, resolved_model
+
+
+def resolve_kokoro_paths(
+    model_path: str | Path | None = None,
+    config_path: str | Path | None = None,
+    voices_dir: str | Path | None = None,
+) -> tuple[Path | None, Path | None, Path | None]:
+    """Resolve Kokoro TTS model, config, and voices directory."""
+    resolved_model: Path | None = None
+    resolved_config: Path | None = None
+    resolved_voices: Path | None = None
+    repo_root = Path(__file__).resolve().parents[1]
+
+    # 1. Model
+    if model_path is not None:
+        p = Path(model_path).expanduser().resolve()
+        if p.is_file():
+            resolved_model = p
+    elif env_model := os.environ.get("ANAYA_KOKORO_MODEL"):
+        p = Path(env_model).expanduser().resolve()
+        if p.is_file():
+            resolved_model = p
+
+    # 2. Config
+    if config_path is not None:
+        p = Path(config_path).expanduser().resolve()
+        if p.is_file():
+            resolved_config = p
+    elif env_config := os.environ.get("ANAYA_KOKORO_CONFIG"):
+        p = Path(env_config).expanduser().resolve()
+        if p.is_file():
+            resolved_config = p
+
+    # 3. Voices
+    if voices_dir is not None:
+        p = Path(voices_dir).expanduser().resolve()
+        if p.is_dir():
+            resolved_voices = p
+    elif env_voices := os.environ.get("ANAYA_KOKORO_VOICES"):
+        p = Path(env_voices).expanduser().resolve()
+        if p.is_dir():
+            resolved_voices = p
+
+    # Auto-discovery in HuggingFace cache if any part is missing
+    if not (resolved_model and resolved_config and resolved_voices):
+        hf_snapshots = (
+            Path.home()
+            / ".cache"
+            / "huggingface"
+            / "hub"
+            / "models--hexgrad--Kokoro-82M"
+            / "snapshots"
+        )
+        if hf_snapshots.is_dir():
+            for snapshot_dir in hf_snapshots.iterdir():
+                if snapshot_dir.is_dir():
+                    m = snapshot_dir / "kokoro-v1_0.pth"
+                    c = snapshot_dir / "config.json"
+                    v = snapshot_dir / "voices"
+                    if m.is_file() and c.is_file() and v.is_dir():
+                        resolved_model = resolved_model or m.resolve()
+                        resolved_config = resolved_config or c.resolve()
+                        resolved_voices = resolved_voices or v.resolve()
+                        break
+
+    # Auto-discovery in repo_root / models / kokoro
+    if not (resolved_model and resolved_config and resolved_voices):
+        local_kokoro = repo_root / "models" / "kokoro"
+        if local_kokoro.is_dir():
+            m = local_kokoro / "kokoro-v1_0.pth"
+            c = local_kokoro / "config.json"
+            v = local_kokoro / "voices"
+            if m.is_file() and c.is_file() and v.is_dir():
+                resolved_model = resolved_model or m.resolve()
+                resolved_config = resolved_config or c.resolve()
+                resolved_voices = resolved_voices or v.resolve()
+
+    return resolved_model, resolved_config, resolved_voices
+
+
 def create_controller(
     config: AppConfig | None = None,
     memory_db_path: Path | str | None = None,
@@ -53,6 +216,11 @@ def create_controller(
     custom_ai_provider: ModelProvider | None = None,
     custom_notification_handler: NotificationHandler | None = None,
     clock: Callable[[], datetime] | None = None,
+    whisper_executable_path: Path | str | None = None,
+    whisper_model_path: Path | str | None = None,
+    kokoro_model_path: Path | str | None = None,
+    kokoro_config_path: Path | str | None = None,
+    kokoro_voices_dir: Path | str | None = None,
 ) -> AssistantController:
     """Assemble and wire the complete Anaya assistant subsystem graph.
 
@@ -148,8 +316,10 @@ def create_controller(
         voice_pipeline: VoicePipeline | None = None
         if enable_speech:
             speech_config = SpeechConfig(
-                sample_rate=effective_config.speech_sample_rate,
+                sample_rate=16000,
                 push_to_talk=effective_config.push_to_talk,
+                tts_voice=effective_config.tts_voice,
+                tts_language=effective_config.tts_language,
             )
             if len(provided_adapters) == 4:
                 voice_pipeline = VoicePipeline(
@@ -161,19 +331,89 @@ def create_controller(
                     config=speech_config,
                 )
             else:
+                recorder: AudioRecorder | None = None
+                stt: SpeechToText | None = None
+                tts: TextToSpeech | None = None
+                player: AudioPlayer | None = None
+
+                # A. Audio Recorder (Microphone Input)
                 try:
-                    from app.speech.adapters.kokoro_tts import KokoroTTSAdapter
-                    from app.speech.adapters.sounddevice_io import (
-                        SoundDeviceAudioPlayer,
-                        SoundDeviceAudioRecorder,
+                    from app.speech.adapters.sounddevice_io import SoundDeviceRecorder
+                    recorder = SoundDeviceRecorder(
+                        sample_rate=speech_config.sample_rate,
+                        channels=speech_config.channels,
                     )
-                    from app.speech.adapters.whisper_cpp import WhisperCppSTTAdapter
+                except Exception as exc:
+                    logger.warning("Microphone audio recorder unavailable: %s", exc)
+                    recorder = None
 
-                    recorder = SoundDeviceAudioRecorder()
-                    stt = WhisperCppSTTAdapter()
-                    tts = KokoroTTSAdapter()
-                    player = SoundDeviceAudioPlayer()
+                # B. Speech-to-Text (Whisper.cpp)
+                whisper_exe, whisper_model = resolve_whisper_paths(
+                    executable_path=whisper_executable_path,
+                    model_path=whisper_model_path,
+                )
+                if whisper_exe is None:
+                    logger.warning(
+                        "Whisper.cpp executable not found. Configure ANAYA_WHISPER_BIN or place whisper-cli on PATH."
+                    )
+                elif whisper_model is None:
+                    logger.warning(
+                        "Whisper.cpp model not found. Configure ANAYA_WHISPER_MODEL or place ggml model in models/whisper."
+                    )
+                else:
+                    try:
+                        from app.speech.adapters.whisper_cpp import WhisperCppSTT
+                        stt = WhisperCppSTT(
+                            executable_path=whisper_exe,
+                            model_path=whisper_model,
+                            language="en",
+                        )
+                    except Exception as exc:
+                        logger.warning("Whisper.cpp STT adapter initialization failed: %s", exc)
+                        stt = None
 
+                # C. Audio Player (Playback Output)
+                try:
+                    from app.speech.adapters.sounddevice_io import SoundDevicePlayer
+                    player = SoundDevicePlayer()
+                except Exception as exc:
+                    logger.info("Audio playback output unavailable (%s); using null player.", exc)
+                    player = None
+
+                if player is None:
+                    from app.speech.adapters.null import NullAudioPlayer
+                    player = NullAudioPlayer(reason="Physical audio output device or library unavailable.")
+
+                # D. Text-to-Speech (Kokoro TTS)
+                k_model, k_config, k_voices = resolve_kokoro_paths(
+                    model_path=kokoro_model_path,
+                    config_path=kokoro_config_path,
+                    voices_dir=kokoro_voices_dir,
+                )
+                if k_model and k_config and k_voices:
+                    try:
+                        from app.speech.adapters.kokoro_tts import KokoroTTS, _get_kokoro_and_torch
+                        _get_kokoro_and_torch()
+                        tts = KokoroTTS(
+                            model_path=k_model,
+                            config_path=k_config,
+                            voices_dir=k_voices,
+                            voice=effective_config.tts_voice,
+                            language=effective_config.tts_language,
+                        )
+                    except Exception as exc:
+                        logger.info("Kokoro TTS unavailable (%s); using null TTS.", exc)
+                        tts = None
+                else:
+                    logger.info("Kokoro TTS assets not configured or not found; using null TTS.")
+                    tts = None
+
+                if tts is None:
+                    from app.speech.adapters.null import NullTextToSpeech
+                    tts = NullTextToSpeech(reason="Neural TTS dependencies or model assets unavailable.")
+
+                # E. Assemble VoicePipeline if Input & STT are Available
+                if recorder is not None and stt is not None:
                     voice_pipeline = VoicePipeline(
                         recorder=recorder,
                         stt=stt,
@@ -182,10 +422,19 @@ def create_controller(
                         player=player,
                         config=speech_config,
                     )
-                except Exception as exc:
                     logger.info(
-                        "Audio adapters unavailable (%s); AssistantController will operate in text-only mode.",
-                        exc,
+                        "VoicePipeline initialized successfully (STT: Whisper.cpp, TTS: %s).",
+                        type(tts).__name__,
+                    )
+                else:
+                    reasons: list[str] = []
+                    if recorder is None:
+                        reasons.append("recorder unavailable")
+                    if stt is None:
+                        reasons.append("STT unavailable")
+                    logger.info(
+                        "VoicePipeline not initialized (%s); operating in text-only mode.",
+                        ", ".join(reasons),
                     )
                     voice_pipeline = None
 

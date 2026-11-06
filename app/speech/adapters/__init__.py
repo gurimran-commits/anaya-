@@ -7,6 +7,10 @@ from app.speech.adapters.mock import (
     MockSpeechToText,
     MockTextToSpeech,
 )
+from app.speech.adapters.null import (
+    NullAudioPlayer,
+    NullTextToSpeech,
+)
 from app.speech.adapters.sounddevice_io import (
     SoundDevicePlayer,
     SoundDeviceRecorder,
@@ -18,6 +22,8 @@ __all__ = [
     "MockSpeechToText",
     "MockTextToSpeech",
     "MockAudioPlayer",
+    "NullAudioPlayer",
+    "NullTextToSpeech",
     "SoundDeviceRecorder",
     "SoundDevicePlayer",
     "WhisperCppSTT",

@@ -268,6 +268,7 @@ class OllamaProvider:
             "model": model,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
             "stream": False,
+            "think": False,
             "options": {
                 "temperature": opts.temperature,
                 "num_predict": opts.num_predict,
@@ -286,6 +287,17 @@ class OllamaProvider:
         content = msg_obj.get("content")
         if not isinstance(content, str):
             raise ModelProviderError("Malformed response from Ollama /api/chat: 'content' must be a string.")
+
+        if not content.strip():
+            logger.warning("Ollama /api/chat returned empty content for model '%s'.", model)
+            return GenerationResult(
+                success=False,
+                content="",
+                model=str(res.get("model", model)),
+                total_duration_ns=res.get("total_duration"),
+                eval_count=res.get("eval_count"),
+                error_message="Model returned empty response content.",
+            )
 
         return GenerationResult(
             success=True,

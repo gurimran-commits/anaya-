@@ -291,3 +291,21 @@ class TestAssistantAIIntegration:
         assert "AI answer to: Can you explain how photosynthesis works?" in res2.message
 
         assert len(provider.queries) == 2
+
+    def test_empty_ai_response_falls_back_safely_to_deterministic_error(self, integrated_assistant):
+        assistant, manager, provider = integrated_assistant
+
+        # Override provider chat to return controlled empty response
+        provider.chat = lambda messages, model, options=None: GenerationResult(
+            success=False,
+            content="",
+            model=model,
+            error_message="Model returned empty response content.",
+        )
+
+        res = assistant.process("How are you today?")
+        assert res.success is False
+        assert "Command not recognized" in res.message
+        # History must not keep the unresponded user turn
+        user_messages = [m for m in manager.history.get_messages() if m.role == "user"]
+        assert len(user_messages) == 0

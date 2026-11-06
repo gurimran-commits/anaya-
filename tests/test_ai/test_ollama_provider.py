@@ -182,6 +182,7 @@ class TestOllamaProviderEndpoints:
             data = json.loads(req.data.decode("utf-8"))
             assert data["model"] == "qwen2.5:1.5b"
             assert data["stream"] is False
+            assert data.get("think") is False
             assert len(data["messages"]) == 1
             assert data["messages"][0]["content"] == "How is the weather?"
             return MockHTTPResponse(json.dumps(mock_chat_res).encode("utf-8"))
@@ -194,6 +195,55 @@ class TestOllamaProviderEndpoints:
         assert result.content == "The weather today is clear."
         assert result.model == "qwen2.5:1.5b"
         assert result.eval_count == 12
+
+    def test_chat_thinking_never_exposed_as_content(self):
+        """Internal reasoning tokens in message.thinking are never returned as user-facing content."""
+        mock_thinking_res = {
+            "model": "qwen3.5:4b",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "thinking": "Step 1: Ponder user prompt. Step 2: Formulate internal thoughts.",
+            },
+            "done_reason": "length",
+            "total_duration": 2000000000,
+        }
+
+        def handler(req, timeout):
+            data = json.loads(req.data.decode("utf-8"))
+            assert data["think"] is False
+            return MockHTTPResponse(json.dumps(mock_thinking_res).encode("utf-8"))
+
+        provider = OllamaProvider(opener=MockOpener(handler))
+        messages = [ChatMessage(role="user", content="Hello Anaya")]
+        result = provider.chat(messages, model="qwen3.5:4b")
+
+        assert result.success is False
+        assert result.content == ""
+        assert "Step 1" not in result.content
+        assert "thinking" not in result.content.lower()
+        assert result.error_message == "Model returned empty response content."
+
+    def test_chat_empty_or_whitespace_content_returns_controlled_failure(self):
+        """Responses with empty or whitespace-only content return a controlled failure."""
+        mock_empty_res = {
+            "model": "qwen2.5:1.5b",
+            "message": {
+                "role": "assistant",
+                "content": "   \n\t  ",
+            },
+        }
+
+        def handler(req, timeout):
+            return MockHTTPResponse(json.dumps(mock_empty_res).encode("utf-8"))
+
+        provider = OllamaProvider(opener=MockOpener(handler))
+        messages = [ChatMessage(role="user", content="Hello")]
+        result = provider.chat(messages, model="qwen2.5:1.5b")
+
+        assert result.success is False
+        assert result.content == ""
+        assert result.error_message == "Model returned empty response content."
 
     def test_chat_model_not_found_error(self):
         def handler(req, timeout):

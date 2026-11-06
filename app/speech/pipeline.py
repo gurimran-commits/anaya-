@@ -171,6 +171,12 @@ class VoicePipeline:
         if not isinstance(text, str) or not text.strip():
             return False
 
+        from app.speech.adapters.null import NullAudioPlayer, NullTextToSpeech
+
+        if isinstance(self.tts, NullTextToSpeech) or isinstance(self.player, NullAudioPlayer):
+            logger.debug("Spoken response skipped: TTS or audio player is not configured.")
+            return False
+
         try:
             audio = self.tts.synthesize(text.strip())
             if not isinstance(audio, AudioData):
