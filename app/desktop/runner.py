@@ -200,9 +200,9 @@ class DesktopApplicationRunner:
                 return False
 
         try:
-            ctrl_started = self._controller.start()
-            if not ctrl_started:
-                logger.error("AssistantController.start() returned False.")
+            self._controller.start()
+            if not self._controller.is_running:
+                logger.error("AssistantController failed to start (is_running is False).")
                 self._rollback_startup()
                 with self._lock:
                     self._state = RunnerState.ERROR
@@ -318,7 +318,8 @@ class DesktopApplicationRunner:
 
         if self._controller is not None:
             try:
-                self._controller.stop()
+                rem = max(0.0, deadline - time.monotonic())
+                self._controller.stop(timeout=rem)
             except Exception as exc:
                 logger.debug("Error rolling back controller: %s", exc)
 
@@ -395,11 +396,12 @@ class DesktopApplicationRunner:
         else:
             # 5. Stop Controller
             if self._controller is not None:
+                remaining = max(0.0, deadline - time.monotonic())
                 try:
-                    ctrl_ok = self._controller.stop()
-                    if not ctrl_ok:
+                    self._controller.stop(timeout=remaining)
+                    if not self._controller.is_cleanly_stopped:
                         all_clean = False
-                        logger.warning("AssistantController.stop() returned False.")
+                        logger.warning("AssistantController stop was incomplete.")
                 except Exception as exc:
                     all_clean = False
                     logger.error("Error stopping AssistantController: %s", exc, exc_info=True)

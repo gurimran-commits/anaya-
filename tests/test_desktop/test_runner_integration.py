@@ -215,8 +215,10 @@ class RecordingNotificationTarget:
 def test_single_shared_controller_and_coordinator() -> None:
     """HUD and Hotkey services receive the exact same controller and VoiceSessionCoordinator."""
     mock_ctrl = MagicMock()
-    mock_ctrl.start.return_value = True
-    mock_ctrl.stop.return_value = True
+    mock_ctrl.start.return_value = None
+    mock_ctrl.is_running = True
+    mock_ctrl.stop.return_value = None
+    mock_ctrl.is_cleanly_stopped = True
 
     coordinator = VoiceSessionCoordinator()
 
@@ -509,3 +511,37 @@ def test_critical_tray_toggle_shutdown_race() -> None:
     assert not hotkey.is_running
     assert hotkey.state == HotkeyServiceState.STOPPED
     assert len(backend.registered_hotkeys) == 0
+
+
+def test_runner_with_real_controller_integration() -> None:
+    """DesktopApplicationRunner starts and stops cleanly with a real AssistantController instance."""
+    from app.bootstrap import create_controller
+
+    # Create real controller without speech/AI to keep test lightweight and independent
+    ctrl = create_controller(enable_speech=False, enable_ai=False)
+
+    # Disable tray/hotkey real Win32 display by injecting controlled mock UI services
+    mock_hud = MagicMock()
+    mock_hud.start.return_value = True
+    mock_hud.stop.return_value = True
+    mock_hud.is_worker_alive = False
+    mock_hud.is_gui_alive = False
+    mock_hud.is_cleanly_stopped = True
+
+    config = AppConfig(desktop_enabled=True, desktop_tray_enabled=False, hotkey_enabled=False)
+    runner = DesktopApplicationRunner(
+        config=config,
+        controller=ctrl,
+        hud_service=mock_hud,
+    )
+
+    try:
+        assert runner.start() is True
+        assert runner.is_running
+        assert ctrl.is_running
+        assert runner.stop(timeout=2.0) is True
+        assert runner.is_cleanly_stopped
+        assert ctrl.is_cleanly_stopped
+    finally:
+        if ctrl.is_running:
+            ctrl.stop(timeout=2.0)

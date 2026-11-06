@@ -20,25 +20,68 @@ from app.tray.models import TrayServiceState
 
 
 class MockController:
-    """Mock controller tracking lifecycle calls and timestamps."""
+    """Mock controller tracking lifecycle calls and timestamps matching real AssistantController contract."""
 
-    def __init__(self, start_return: bool = True, stop_return: bool = True) -> None:
-        self.start_return = start_return
-        self.stop_return = stop_return
+    def __init__(
+        self,
+        start_success: bool = True,
+        stop_success: bool = True,
+        start_exception: Exception | None = None,
+        stop_exception: Exception | None = None,
+    ) -> None:
+        self.start_success = start_success
+        self.stop_success = stop_success
+        self.start_exception = start_exception
+        self.stop_exception = stop_exception
+
         self.start_called = False
         self.stop_called = False
         self.start_time: float | None = None
         self.stop_time: float | None = None
+        self.received_timeout: float | None = None
 
-    def start(self) -> bool:
+        self._is_running = False
+        self._is_cleanly_stopped = False
+
+    @property
+    def is_running(self) -> bool:
+        return self._is_running
+
+    @is_running.setter
+    def is_running(self, val: bool) -> None:
+        self._is_running = val
+
+    @property
+    def is_cleanly_stopped(self) -> bool:
+        return self._is_cleanly_stopped
+
+    @is_cleanly_stopped.setter
+    def is_cleanly_stopped(self, val: bool) -> None:
+        self._is_cleanly_stopped = val
+
+    def start(self) -> None:
         self.start_called = True
         self.start_time = time.monotonic()
-        return self.start_return
+        if self.start_exception is not None:
+            raise self.start_exception
+        if self.start_success:
+            self._is_running = True
+        else:
+            self._is_running = False
+        return None
 
-    def stop(self) -> bool:
+    def stop(self, timeout: float = 5.0) -> None:
         self.stop_called = True
         self.stop_time = time.monotonic()
-        return self.stop_return
+        self.received_timeout = timeout
+        if self.stop_exception is not None:
+            raise self.stop_exception
+        self._is_running = False
+        if self.stop_success:
+            self._is_cleanly_stopped = True
+        else:
+            self._is_cleanly_stopped = False
+        return None
 
 
 class MockHudService:
@@ -284,7 +327,10 @@ def test_initialization_ordering() -> None:
     call_log: list[str] = []
 
     controller = MockController()
-    controller.start = lambda: call_log.append("controller") or True  # type: ignore[assignment]
+    def _ctrl_start() -> None:
+        call_log.append("controller")
+        controller.is_running = True
+    controller.start = _ctrl_start  # type: ignore[assignment]
 
     hud = MockHudService()
     hud.start = lambda: call_log.append("hud") or True  # type: ignore[assignment]
@@ -318,7 +364,11 @@ def test_reverse_shutdown_ordering() -> None:
     call_log: list[str] = []
 
     controller = MockController()
-    controller.stop = lambda: call_log.append("controller") or True  # type: ignore[assignment]
+    def _ctrl_stop(timeout: float = 0.0) -> None:
+        call_log.append("controller")
+        controller.is_running = False
+        controller.is_cleanly_stopped = True
+    controller.stop = _ctrl_stop  # type: ignore[assignment]
 
     hud = MockHudService()
     def _hud_stop(timeout=0.0):
@@ -368,7 +418,7 @@ def test_reverse_shutdown_ordering() -> None:
 
 def test_controller_start_failure_rollback() -> None:
     """When controller fails to start, initialized resources are rolled back and runner enters ERROR."""
-    controller = MockController(start_return=False)
+    controller = MockController(start_success=False)
     notif = MockNotificationHandler()
 
     runner = DesktopApplicationRunner(
@@ -592,3 +642,118 @@ def test_cli_desktop_routing() -> None:
         code = main(argv=["--desktop"])
         assert code == 0
         assert mock_run.called
+
+
+def test_controller_returns_none_startup_success() -> None:
+    """Controller start() returning None and setting is_running=True allows desktop startup to succeed."""
+    controller = MockController(start_success=True)
+    hud = MockHudService(start_return=True)
+
+    config = AppConfig(desktop_enabled=True, desktop_tray_enabled=False, hotkey_enabled=False)
+    runner = DesktopApplicationRunner(
+        config=config,
+        controller=controller,  # type: ignore[arg-type]
+        hud_service=hud,  # type: ignore[arg-type]
+    )
+
+    started = runner.start()
+    assert started is True
+    assert runner.is_running
+    assert controller.start_called
+    assert controller.is_running
+    assert runner.state == RunnerState.RUNNING
+
+
+def test_controller_start_failure_not_running_rollback() -> None:
+    """Controller start() completing without error but leaving is_running=False triggers rollback and ERROR."""
+    controller = MockController(start_success=False)
+    notif = MockNotificationHandler()
+
+    runner = DesktopApplicationRunner(
+        controller=controller,  # type: ignore[arg-type]
+        notification_handler=notif,  # type: ignore[arg-type]
+    )
+
+    started = runner.start()
+    assert started is False
+    assert runner.state == RunnerState.ERROR
+    assert notif.stop_called
+
+
+def test_controller_start_exception_rollback() -> None:
+    """Controller start() raising an exception triggers rollback and enters ERROR."""
+    controller = MockController(start_exception=RuntimeError("Simulated controller start exception"))
+    notif = MockNotificationHandler()
+
+    runner = DesktopApplicationRunner(
+        controller=controller,  # type: ignore[arg-type]
+        notification_handler=notif,  # type: ignore[arg-type]
+    )
+
+    started = runner.start()
+    assert started is False
+    assert runner.state == RunnerState.ERROR
+    assert notif.stop_called
+
+
+def test_controller_stop_returns_none_clean_shutdown() -> None:
+    """Controller stop() returning None and setting is_cleanly_stopped=True is treated as clean shutdown."""
+    controller = MockController(start_success=True, stop_success=True)
+    hud = MockHudService(start_return=True, stop_return=True)
+
+    config = AppConfig(desktop_enabled=True, desktop_tray_enabled=False, hotkey_enabled=False)
+    runner = DesktopApplicationRunner(
+        config=config,
+        controller=controller,  # type: ignore[arg-type]
+        hud_service=hud,  # type: ignore[arg-type]
+    )
+
+    assert runner.start() is True
+    stopped = runner.stop(timeout=2.0)
+    assert stopped is True
+    assert runner.state == RunnerState.STOPPED
+    assert runner.is_cleanly_stopped
+    assert controller.stop_called
+    assert controller.is_cleanly_stopped
+    assert controller.received_timeout is not None
+
+
+def test_controller_stop_incomplete_shutdown_detected() -> None:
+    """Controller stop() completing with is_cleanly_stopped=False marks runner stop incomplete."""
+    controller = MockController(start_success=True, stop_success=False)
+    hud = MockHudService(start_return=True, stop_return=True)
+
+    config = AppConfig(desktop_enabled=True, desktop_tray_enabled=False, hotkey_enabled=False)
+    runner = DesktopApplicationRunner(
+        config=config,
+        controller=controller,  # type: ignore[arg-type]
+        hud_service=hud,  # type: ignore[arg-type]
+    )
+
+    assert runner.start() is True
+    stopped = runner.stop(timeout=2.0)
+    assert stopped is False
+    assert not runner.is_cleanly_stopped
+    assert runner.state == RunnerState.STOPPING
+    assert controller.stop_called
+    assert not controller.is_cleanly_stopped
+
+
+def test_controller_stop_exception_handling() -> None:
+    """Controller stop() raising an exception is caught and marked as incomplete shutdown."""
+    controller = MockController(start_success=True, stop_exception=RuntimeError("Controller close failed"))
+    hud = MockHudService(start_return=True, stop_return=True)
+
+    config = AppConfig(desktop_enabled=True, desktop_tray_enabled=False, hotkey_enabled=False)
+    runner = DesktopApplicationRunner(
+        config=config,
+        controller=controller,  # type: ignore[arg-type]
+        hud_service=hud,  # type: ignore[arg-type]
+    )
+
+    assert runner.start() is True
+    stopped = runner.stop(timeout=2.0)
+    assert stopped is False
+    assert not runner.is_cleanly_stopped
+    assert runner.state == RunnerState.STOPPING
+    assert controller.stop_called
