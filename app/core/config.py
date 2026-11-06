@@ -1,3 +1,4 @@
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -81,10 +82,51 @@ class AppConfig:
     task_scheduler_poll_interval: float = 15.0
     task_recover_missed_reminders: bool = True
 
+    # Global hotkey settings (Phase 9B).
+    hotkey_enabled: bool = False
+    hotkey_combination: str = "win+alt+a"
+    hotkey_voice_duration: float = 5.0
+
     # Skill capability grants mapping skill_id to tuple of granted permission names.
     skill_permission_grants: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.hotkey_enabled, bool):
+            raise TypeError(
+                f"hotkey_enabled must be a boolean, got {type(self.hotkey_enabled).__name__}."
+            )
+
+        if isinstance(self.hotkey_voice_duration, bool) or not isinstance(
+            self.hotkey_voice_duration, (int, float)
+        ):
+            raise TypeError(
+                f"hotkey_voice_duration must be a float or int, got {type(self.hotkey_voice_duration).__name__}."
+            )
+
+        if not math.isfinite(self.hotkey_voice_duration):
+            raise ValueError(
+                f"hotkey_voice_duration must be a finite number, got {self.hotkey_voice_duration}."
+            )
+
+        if self.hotkey_voice_duration <= 0.0 or self.hotkey_voice_duration > 60.0:
+            raise ValueError(
+                f"hotkey_voice_duration must be positive and at most 60.0s, got {self.hotkey_voice_duration}."
+            )
+
+        object.__setattr__(
+            self, "hotkey_voice_duration", float(self.hotkey_voice_duration)
+        )
+
+        if not isinstance(self.hotkey_combination, str):
+            raise TypeError(
+                f"hotkey_combination must be a string, got {type(self.hotkey_combination).__name__}."
+            )
+
+        from app.hotkey.models import HotkeyCombination
+
+        parsed_combo = HotkeyCombination.parse(self.hotkey_combination)
+        object.__setattr__(self, "hotkey_combination", parsed_combo.canonical_string)
+
         if not isinstance(self.skill_permission_grants, (dict, Mapping)):
             raise TypeError("skill_permission_grants must be a dictionary or mapping.")
 
