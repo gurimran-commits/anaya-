@@ -336,6 +336,10 @@ class WindowsTrayService:
     def _run_hotkey_toggle_worker(self) -> None:
         """Dedicated worker executing serialized start/stop on GlobalHotkeyService."""
         try:
+            with self._lock:
+                if self._stop_requested:
+                    return
+
             hk = self._hotkey_service
             if hk is not None:
                 if hk.is_running:

@@ -87,6 +87,14 @@ class AppConfig:
     hotkey_combination: str = "win+alt+a"
     hotkey_voice_duration: float = 5.0
 
+    # Desktop integration settings (Phase 9E).
+    desktop_enabled: bool = False
+    desktop_tray_enabled: bool = True
+    desktop_hud_enabled: bool = True
+    desktop_hud_start_hidden: bool = True
+    desktop_notifications_enabled: bool = True
+    desktop_aumid: str = "Anaya.DesktopAssistant"
+
     # Skill capability grants mapping skill_id to tuple of granted permission names.
     skill_permission_grants: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
@@ -126,6 +134,28 @@ class AppConfig:
 
         parsed_combo = HotkeyCombination.parse(self.hotkey_combination)
         object.__setattr__(self, "hotkey_combination", parsed_combo.canonical_string)
+
+        for bool_field in (
+            "desktop_enabled",
+            "desktop_tray_enabled",
+            "desktop_hud_enabled",
+            "desktop_hud_start_hidden",
+            "desktop_notifications_enabled",
+        ):
+            val = getattr(self, bool_field)
+            if not isinstance(val, bool):
+                raise TypeError(
+                    f"{bool_field} must be a boolean, got {type(val).__name__}."
+                )
+
+        if not isinstance(self.desktop_aumid, str):
+            raise TypeError(
+                f"desktop_aumid must be a string, got {type(self.desktop_aumid).__name__}."
+            )
+        trimmed_aumid = self.desktop_aumid.strip()
+        if not trimmed_aumid:
+            raise ValueError("desktop_aumid must be a non-empty string.")
+        object.__setattr__(self, "desktop_aumid", trimmed_aumid)
 
         if not isinstance(self.skill_permission_grants, (dict, Mapping)):
             raise TypeError("skill_permission_grants must be a dictionary or mapping.")

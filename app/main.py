@@ -19,7 +19,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments for Anaya CLI."""
     parser = argparse.ArgumentParser(
         prog="anaya",
-        description="Anaya AI Desktop Assistant (Text Mode)",
+        description="Anaya AI Desktop Assistant",
+    )
+    parser.add_argument(
+        "--desktop",
+        action="store_true",
+        help="Run Anaya in desktop mode with system tray, hotkeys, and HUD.",
     )
     return parser.parse_args(argv)
 
@@ -79,9 +84,20 @@ def main(
         print_err = _default_err
 
     try:
-        parse_args(argv)
+        args = parse_args(argv)
     except SystemExit as exc:
         return exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+
+    if args.desktop:
+        try:
+            from app.desktop.runner import DesktopApplicationRunner
+
+            runner = DesktopApplicationRunner()
+            return runner.run()
+        except Exception as exc:
+            logger.error("Desktop application fatal error (%s): %s", type(exc).__name__, exc, exc_info=True)
+            print_err(f"Desktop fatal error ({type(exc).__name__}). Check logs for details.")
+            return 1
 
     controller: AssistantController | None = None
     exit_code = 0

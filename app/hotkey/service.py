@@ -43,8 +43,10 @@ class GlobalHotkeyService:
         backend: HotkeyBackend | None = None,
         hotkey_id: int = 1,
         on_voice_result: Callable[[PipelineResult], None] | None = None,
+        coordinator: Any | None = None,
     ) -> None:
         self._controller = controller
+        self._coordinator = coordinator
 
         # Validate duration
         if isinstance(duration, bool) or not isinstance(duration, (int, float)):
@@ -75,6 +77,7 @@ class GlobalHotkeyService:
         self._state = HotkeyServiceState.STOPPED
         self._stop_requested = False
         self._unregistration_failed = False
+        self._terminated = False
 
         self._startup_event = Event()
         self._pump_stopped_event = Event()
@@ -140,6 +143,12 @@ class GlobalHotkeyService:
                 and not self._unregistration_failed
             )
 
+    @property
+    def is_terminated(self) -> bool:
+        """True if terminal shutdown() has been initiated, permanently rejecting future start()."""
+        with self._lock:
+            return self._terminated
+
     def start(self, startup_timeout: float = 3.0) -> bool:
         """Start the message pump and voice worker threads.
 
@@ -154,6 +163,9 @@ class GlobalHotkeyService:
             raise ValueError(f"startup_timeout must be a non-negative finite number, got {startup_timeout}")
 
         with self._lock:
+            if self._terminated:
+                logger.debug("start() rejected: GlobalHotkeyService has been permanently shut down.")
+                return False
             if self._state == HotkeyServiceState.RUNNING:
                 return True
             if self._state != HotkeyServiceState.STOPPED:
@@ -232,10 +244,15 @@ class GlobalHotkeyService:
             return True
 
     def stop(self, timeout: float = 2.0) -> None:
-        """Request shutdown and perform bounded joins on message-pump and voice-worker threads.
+        """Temporarily stop the hotkey service. Reversible: start() may be called again."""
+        self._perform_stop(timeout=timeout, permanent=False)
 
-        Enforces a single monotonic deadline across all thread joins and shutdown helpers.
-        """
+    def shutdown(self, timeout: float = 2.0) -> None:
+        """Permanently terminate the hotkey service. Terminal: future start() calls are rejected."""
+        self._perform_stop(timeout=timeout, permanent=True)
+
+    def _perform_stop(self, timeout: float, permanent: bool) -> None:
+        """Execute bounded shutdown on message-pump and voice-worker threads."""
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
             raise TypeError(f"timeout must be a non-negative number, got {type(timeout).__name__}")
         if not math.isfinite(timeout) or timeout < 0.0:
@@ -244,6 +261,8 @@ class GlobalHotkeyService:
         deadline = time.monotonic() + float(timeout)
 
         with self._lock:
+            if permanent:
+                self._terminated = True
             if (
                 self._state == HotkeyServiceState.STOPPED
                 and self._pump_thread is None
@@ -336,6 +355,16 @@ class GlobalHotkeyService:
                     self._voice_busy = False
                 break
 
+            lease = None
+            if self._coordinator is not None:
+                from app.hud.models import VoiceSessionSource
+                lease = self._coordinator.acquire(VoiceSessionSource.GLOBAL_HOTKEY)
+                if lease is None:
+                    logger.debug("Hotkey voice worker rejected: coordinator lease unavailable.")
+                    with self._voice_lock:
+                        self._voice_busy = False
+                    continue
+
             # Execute voice task
             try:
                 result = self._controller.handle_voice(
@@ -350,6 +379,8 @@ class GlobalHotkeyService:
             except Exception as exc:
                 logger.error("Unhandled error during hotkey voice interaction: %s", exc, exc_info=True)
             finally:
+                if self._coordinator is not None and lease is not None:
+                    self._coordinator.release(lease)
                 with self._voice_lock:
                     self._voice_busy = False
 
@@ -438,6 +469,9 @@ class GlobalHotkeyService:
         with self._voice_lock:
             if self._voice_busy or self._worker_stop_event.is_set() or self._stop_requested:
                 logger.debug("Hotkey press dropped: voice interaction is currently active or stopping.")
+                return
+            if self._coordinator is not None and self._coordinator.is_active:
+                logger.debug("Hotkey press dropped: external voice session active.")
                 return
             self._voice_busy = True
 
