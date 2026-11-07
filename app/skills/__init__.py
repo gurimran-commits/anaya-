@@ -24,6 +24,7 @@ from app.skills.protocol import (
 from app.skills.skill_executor import SkillExecutor
 from app.skills.skill_manager import SkillManager
 from app.skills.skill_registry import SkillRegistry
+from app.skills.supervisor import SkillProcessSupervisor, WORKER_SUPPORTED_SKILLS
 
 __all__ = [
     "InputFieldSpec",
@@ -35,6 +36,8 @@ __all__ = [
     "SkillRegistry",
     "SkillManager",
     "SkillExecutor",
+    "SkillProcessSupervisor",
+    "WORKER_SUPPORTED_SKILLS",
     "GreetingSkill",
     "register_builtin_skills",
     "PROTOCOL_VERSION",

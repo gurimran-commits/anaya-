@@ -7,6 +7,7 @@ if TYPE_CHECKING:
     from app.security.approval_service import ApprovalService
     from app.skills.skill_executor import SkillExecutor
     from app.skills.skill_registry import SkillRegistry
+    from app.skills.supervisor import SkillProcessSupervisor
 
 
 class SkillManager:
@@ -18,6 +19,8 @@ class SkillManager:
         executor: "SkillExecutor | None" = None,
         approval_service: "ApprovalService | None" = None,
         skill_permission_grants: Mapping[str, tuple[str, ...]] | None = None,
+        supervisor: "SkillProcessSupervisor | None" = None,
+        isolated_skill_ids: set[str] | frozenset[str] | None = None,
     ) -> None:
         if registry is None:
             from app.skills.skill_registry import SkillRegistry
@@ -31,10 +34,18 @@ class SkillManager:
                 registry=registry,
                 approval_service=approval_service,
                 skill_permission_grants=skill_permission_grants,
+                supervisor=supervisor,
+                isolated_skill_ids=isolated_skill_ids,
             )
 
         self._registry = registry
         self._executor = executor
+        self._supervisor = supervisor
+
+    @property
+    def supervisor(self) -> "SkillProcessSupervisor | None":
+        """Expose the optional supervisor."""
+        return self._supervisor
 
     @property
     def registry(self) -> "SkillRegistry":

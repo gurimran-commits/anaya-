@@ -3,13 +3,16 @@ import copy
 import json
 import logging
 from typing import TYPE_CHECKING, Any
+import uuid
 
 from app.skills.models import SkillPermission, SkillResult
+from app.skills.protocol import ExecuteRequest
 
 if TYPE_CHECKING:
     from app.security.approval_service import ApprovalService
     from app.skills.models import Skill
     from app.skills.skill_registry import SkillRegistry
+    from app.skills.supervisor import SkillProcessSupervisor
 
 logger = logging.getLogger("anaya.skills")
 
@@ -28,9 +31,13 @@ class SkillExecutor:
         registry: "SkillRegistry",
         approval_service: "ApprovalService | None" = None,
         skill_permission_grants: Mapping[str, tuple[str, ...]] | None = None,
+        supervisor: "SkillProcessSupervisor | None" = None,
+        isolated_skill_ids: set[str] | frozenset[str] | None = None,
     ) -> None:
         self._registry = registry
         self._approval_service = approval_service
+        self._supervisor = supervisor
+        self._isolated_skill_ids: frozenset[str] = frozenset(isolated_skill_ids or ())
         self._skill_permission_grants: dict[str, frozenset[SkillPermission]] = {}
         if skill_permission_grants:
             for s_id, perms in skill_permission_grants.items():
@@ -54,6 +61,16 @@ class SkillExecutor:
     def approval_service(self) -> "ApprovalService | None":
         """Access the configured ApprovalService."""
         return self._approval_service
+
+    @property
+    def supervisor(self) -> "SkillProcessSupervisor | None":
+        """Access the optional SkillProcessSupervisor."""
+        return self._supervisor
+
+    @property
+    def isolated_skill_ids(self) -> frozenset[str]:
+        """Return the set of skill IDs configured for isolated execution."""
+        return self._isolated_skill_ids
 
     @property
     def skill_permission_grants(self) -> dict[str, frozenset[SkillPermission]]:
@@ -225,7 +242,86 @@ class SkillExecutor:
                     message="Invalid, expired, or unauthorized confirmation ID.",
                 )
 
-        # 6. Invoke skill implementation with complete exception isolation
+        # 6. Route execution (isolated supervisor vs in-process)
+        if clean_id in self._isolated_skill_ids:
+            return self._execute_isolated(skill, clean_id, validated_inputs)
+
+        # 7. In-process execution (default for trusted built-in skills)
+        return self._execute_in_process(skill, clean_id, validated_inputs)
+
+    def _execute_isolated(
+        self,
+        skill: "Skill",
+        clean_id: str,
+        validated_inputs: dict[str, Any],
+    ) -> SkillResult:
+        """Dispatch execution through the isolated worker supervisor without in-process fallback."""
+        if self._supervisor is None:
+            return SkillResult(
+                success=False,
+                error="supervisor_unavailable",
+                message=f"Skill '{clean_id}' is configured for isolated execution, but no supervisor is available.",
+            )
+
+        if not self._supervisor.is_supported(clean_id):
+            return SkillResult(
+                success=False,
+                error="unsupported_skill",
+                message=(
+                    f"Skill '{clean_id}' is not supported by the isolated worker registry in Step 10.2. "
+                    "External skill dynamic loading is deferred to Phase 10.4."
+                ),
+            )
+
+        req_id = f"req-{uuid.uuid4().hex[:16]}"
+        request = ExecuteRequest(
+            request_id=req_id,
+            skill_id=clean_id,
+            inputs=validated_inputs,
+        )
+
+        try:
+            response = self._supervisor.execute(request)
+        except Exception as exc:
+            logger.exception("Supervisor execution error for skill '%s'", clean_id)
+            return SkillResult(
+                success=False,
+                error="supervisor_error",
+                message=f"Supervisor execution failed: {exc}",
+            )
+
+        if response.success:
+            data = response.result.get("data") if response.result else None
+            msg = response.result.get("message") if response.result else ""
+            return SkillResult(
+                success=True,
+                data=data,
+                message=msg or "",
+            )
+
+        # Handle failure: fail-closed, NEVER fallback to in-process!
+        err_code = "execution_failed"
+        err_msg = "Skill execution failed."
+        if response.error:
+            err_code = response.error.get("code") or err_code
+            err_msg = response.error.get("message") or err_msg
+        elif response.result and response.result.get("error"):
+            err_code = response.result.get("error") or err_code
+            err_msg = response.result.get("message") or err_msg
+
+        return SkillResult(
+            success=False,
+            error=err_code,
+            message=err_msg,
+        )
+
+    def _execute_in_process(
+        self,
+        skill: "Skill",
+        clean_id: str,
+        validated_inputs: dict[str, Any],
+    ) -> SkillResult:
+        """Execute a skill in-process under exception isolation."""
         try:
             result = skill.execute(validated_inputs)
             if isinstance(result, SkillResult):
