@@ -21,6 +21,12 @@ from app.skills.protocol import (
     encode_request,
     encode_response,
 )
+from app.skills.manifest import (
+    ManifestValidationError,
+    SkillManifest,
+    load_skill_manifest,
+    parse_skill_manifest,
+)
 from app.skills.skill_executor import SkillExecutor
 from app.skills.skill_manager import SkillManager
 from app.skills.skill_registry import SkillRegistry
@@ -52,4 +58,8 @@ __all__ = [
     "decode_request",
     "encode_response",
     "decode_response",
+    "SkillManifest",
+    "ManifestValidationError",
+    "parse_skill_manifest",
+    "load_skill_manifest",
 ]
