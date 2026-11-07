@@ -20,6 +20,17 @@ from app.skills.sandbox.appcontainer import (
     ProfileDeletionError,
     validate_session_id,
 )
+from app.skills.sandbox.process_launcher import (
+    LauncherError,
+    PreResumeVerificationError,
+    ProcessReapError,
+    ProcessStartupError,
+    SandboxedProcess,
+    SandboxedProcessLauncher,
+    confirm_process_death_and_reap,
+    create_sanitized_environment,
+    verify_appcontainer_process_token,
+)
 from app.skills.sandbox.runtime_provisioner import (
     RuntimeProvisioner,
     RuntimeProvisionerError,
@@ -32,6 +43,7 @@ from app.skills.sandbox.session_registry import (
     STATUS_PROFILE_CREATED,
     STATUS_PROFILE_PENDING,
     STATUS_SCRATCH_READY,
+    STATUS_WORKER_SUSPENDED,
     STATUS_WORKER_RUNNING,
     ProcessLiveness,
     SessionActiveError,
@@ -135,6 +147,7 @@ __all__ = [
     "STATUS_PROFILE_PENDING",
     "STATUS_PROFILE_CREATED",
     "STATUS_SCRATCH_READY",
+    "STATUS_WORKER_SUSPENDED",
     "STATUS_WORKER_RUNNING",
     "STATUS_COMPLETED",
     "ALLOWED_METADATA_FIELDS",
@@ -184,4 +197,14 @@ __all__ = [
     "NO_INHERITANCE",
     "SUB_CONTAINERS_AND_OBJECTS_INHERIT",
     "CHILD_INHERIT_ONLY_ACE",
+    # Step 10.3.3 Extended Process Launcher
+    "SandboxedProcess",
+    "SandboxedProcessLauncher",
+    "LauncherError",
+    "ProcessStartupError",
+    "PreResumeVerificationError",
+    "ProcessReapError",
+    "confirm_process_death_and_reap",
+    "verify_appcontainer_process_token",
+    "create_sanitized_environment",
 ]

@@ -62,6 +62,7 @@ logger = logging.getLogger("anaya.skills.sandbox.session_registry")
 STATUS_PROFILE_PENDING: str = "profile_pending"
 STATUS_PROFILE_CREATED: str = "profile_created"
 STATUS_SCRATCH_READY: str = "scratch_ready"
+STATUS_WORKER_SUSPENDED: str = "worker_suspended"
 STATUS_WORKER_RUNNING: str = "worker_running"
 STATUS_COMPLETED: str = "completed"
 
@@ -70,6 +71,7 @@ VALID_STATUSES: frozenset[str] = frozenset(
         STATUS_PROFILE_PENDING,
         STATUS_PROFILE_CREATED,
         STATUS_SCRATCH_READY,
+        STATUS_WORKER_SUSPENDED,
         STATUS_WORKER_RUNNING,
         STATUS_COMPLETED,
     }
@@ -694,6 +696,34 @@ class SessionRegistry:
         current = self.read_metadata(validated_id)
         current.update(updates)
         self.write_durable_metadata(validated_id, current)
+
+    def record_worker_suspended(
+        self,
+        session_id: str,
+        worker_pid: int,
+        worker_start_time: int | None = None,
+    ) -> None:
+        """Record worker process identity and creation FILETIME while worker is created suspended."""
+        if worker_start_time is None:
+            worker_start_time = get_process_creation_time(worker_pid)
+
+        self.update_session_state(
+            session_id,
+            {
+                "worker_pid": int(worker_pid),
+                "worker_start_time": worker_start_time,
+                "status": STATUS_WORKER_SUSPENDED,
+            },
+        )
+
+    def record_worker_resumed(self, session_id: str) -> None:
+        """Record worker transition to running after successful ResumeThread."""
+        self.update_session_state(
+            session_id,
+            {
+                "status": STATUS_WORKER_RUNNING,
+            },
+        )
 
     def record_worker_launch(
         self,

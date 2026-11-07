@@ -13,7 +13,8 @@ import subprocess
 import sys
 import threading
 import time
-from typing import TextIO
+from typing import Any, TextIO
+import uuid
 
 from app.skills.protocol import (
     MAX_MESSAGE_BYTES,
@@ -24,6 +25,13 @@ from app.skills.protocol import (
     create_error_response,
     decode_response,
     encode_request,
+)
+from app.skills.sandbox import (
+    ProcessReapError,
+    RuntimeProvisioner,
+    SandboxedProcess,
+    SandboxedProcessLauncher,
+    SessionRegistry,
 )
 
 logger = logging.getLogger("anaya.skills.supervisor")
@@ -55,10 +63,12 @@ class LaunchReservation:
 
     request_id: str
     deadline: float
-    proc: subprocess.Popen | None = None
+    proc: Any | None = None
     error: Exception | None = None
     cancelled: bool = False
     completed: bool = False
+    capacity_released: bool = False
+    quarantined: bool = False
 
 
 class SkillProcessSupervisor:
@@ -71,6 +81,10 @@ class SkillProcessSupervisor:
         startup_timeout_seconds: float = DEFAULT_STARTUP_TIMEOUT_SECONDS,
         transmission_timeout_seconds: float = DEFAULT_TRANSMISSION_TIMEOUT_SECONDS,
         cleanup_grace_period_seconds: float = DEFAULT_CLEANUP_GRACE_PERIOD_SECONDS,
+        runtime_provisioner: RuntimeProvisioner | None = None,
+        session_registry: SessionRegistry | None = None,
+        launcher: SandboxedProcessLauncher | None = None,
+        use_sandbox: bool | None = None,
     ) -> None:
         self._python_executable = python_executable or sys.executable
         self._max_concurrent_workers = max_concurrent_workers
@@ -78,12 +92,36 @@ class SkillProcessSupervisor:
         self._transmission_timeout_seconds = transmission_timeout_seconds
         self._cleanup_grace_period_seconds = cleanup_grace_period_seconds
 
+        # Sandboxing configuration
+        # If python_executable was explicitly passed with custom binary/command, default use_sandbox=False
+        # Otherwise, default use_sandbox=True on Windows.
+        if use_sandbox is None:
+            if python_executable is not None and python_executable != sys.executable:
+                self._use_sandbox = False
+            else:
+                self._use_sandbox = (sys.platform == "win32")
+        else:
+            self._use_sandbox = use_sandbox
+
+        if self._use_sandbox and sys.platform != "win32":
+            raise SupervisorError("Windows 10/Server 2016+ is required for isolated sandboxed skill execution.")
+
+        self._session_registry: SessionRegistry | None = None
+        self._runtime_provisioner: RuntimeProvisioner | None = None
+        self._launcher: SandboxedProcessLauncher | None = None
+        self._quarantined_locks: dict[str, int] = {}
+
+        if self._use_sandbox:
+            self._session_registry = session_registry or SessionRegistry()
+            self._runtime_provisioner = runtime_provisioner or RuntimeProvisioner()
+            self._launcher = launcher or SandboxedProcessLauncher(self._runtime_provisioner, self._session_registry)
+
         self._lock = threading.RLock()
         self._semaphore = threading.BoundedSemaphore(max_concurrent_workers)
 
         # Process and request tracking
         self._active_request_ids: set[str] = set()
-        self._active_processes: dict[str, subprocess.Popen] = {}
+        self._active_processes: dict[str, Any] = {}
         self._in_progress_launches: dict[str, LaunchReservation] = {}
 
         # Shutdown state
@@ -240,22 +278,48 @@ class SkillProcessSupervisor:
             return reservation.proc
 
     def _run_popen(self, reservation: LaunchReservation) -> None:
-        """Thread worker executing subprocess.Popen and registering the handle."""
-        proc: subprocess.Popen | None = None
+        """Thread worker executing process creation and registering the handle."""
+        proc: Any | None = None
         spawn_error: Exception | None = None
-        try:
-            proc = subprocess.Popen(
-                [self._python_executable, "-m", "app.skills.worker"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-        except Exception as exc:
-            spawn_error = exc
+        session_id = str(uuid.uuid4())
+        h_lock: int | None = None
+
+        if self._use_sandbox and self._launcher is not None and self._session_registry is not None:
+            try:
+                h_lock = self._session_registry.acquire_session_lock(session_id, create_new=True)
+                proc = self._launcher.launch(
+                    session_id=session_id,
+                    h_lock=h_lock,
+                    deadline=reservation.deadline,
+                )
+            except ProcessReapError as reap_err:
+                spawn_error = reap_err
+                reservation.quarantined = True
+                if reap_err.h_lock is not None:
+                    with self._lock:
+                        self._quarantined_locks[reap_err.session_id] = reap_err.h_lock
+            except Exception as exc:
+                spawn_error = exc
+                if h_lock is not None:
+                    try:
+                        self._session_registry.complete_session(session_id, h_lock)
+                    except Exception:
+                        pass
+        else:
+            try:
+                proc = subprocess.Popen(
+                    [self._python_executable, "-m", "app.skills.worker"],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+            except Exception as exc:
+                spawn_error = exc
 
         with self._lock:
             reservation.proc = proc
-            reservation.error = spawn_error
+            if reservation.error is None or isinstance(spawn_error, ProcessReapError):
+                reservation.error = spawn_error
             reservation.completed = True
 
             if reservation.cancelled or self._shutdown_initiated or time.monotonic() >= reservation.deadline:
@@ -268,11 +332,20 @@ class SkillProcessSupervisor:
                 self._in_progress_launches.pop(reservation.request_id, None)
                 self._active_processes.pop(reservation.request_id, None)
                 self._active_request_ids.discard(reservation.request_id)
-                self._semaphore.release()
 
-                # If shutdown was initiated and all active processes and launch reservations are now resolved
+                is_quarantined = (
+                    reservation.quarantined
+                    or (proc is not None and getattr(proc, "_quarantined", False))
+                    or isinstance(reservation.error, ProcessReapError)
+                )
+
+                if not is_quarantined and not reservation.capacity_released:
+                    reservation.capacity_released = True
+                    self._semaphore.release()
+
+                # If shutdown was initiated and all active processes, launch reservations, and quarantines are resolved
                 if self._shutdown_initiated and not self._shutdown_completed:
-                    if not self._active_processes and not self._in_progress_launches:
+                    if not self._active_processes and not self._in_progress_launches and not self._quarantined_locks:
                         self._shutdown_completed = True
                         self._shutdown_completed_event.set()
                 return
@@ -281,7 +354,7 @@ class SkillProcessSupervisor:
 
     def _communicate_bounded(
         self,
-        proc: subprocess.Popen,
+        proc: Any,
         request: ExecuteRequest,
         deadline: float,
     ) -> ExecuteResponse:
@@ -508,12 +581,20 @@ class SkillProcessSupervisor:
     def _cleanup_execution(
         self,
         request_id: str,
-        proc: subprocess.Popen | None,
+        proc: Any | None,
         reservation: LaunchReservation,
     ) -> None:
         """Atomic cleanup releasing active process, launch reservation, and concurrency capacity."""
         if proc is not None:
             self._force_kill_and_reap(proc)
+            if isinstance(proc, SandboxedProcess) and self._session_registry is not None:
+                with self._lock:
+                    is_quarantined = proc.session_id in self._quarantined_locks or getattr(proc, "_quarantined", False)
+                if not is_quarantined:
+                    try:
+                        self._session_registry.complete_session(proc.session_id, proc.h_lock)
+                    except Exception as comp_exc:
+                        logger.warning("complete_session error for '%s': %s", proc.session_id, comp_exc)
 
         with self._lock:
             if not reservation.completed:
@@ -528,15 +609,24 @@ class SkillProcessSupervisor:
             self._in_progress_launches.pop(request_id, None)
             self._active_request_ids.discard(request_id)
 
-            # If shutdown was initiated and all launches and processes are settled, complete shutdown
+            is_quarantined = (
+                reservation.quarantined
+                or (proc is not None and getattr(proc, "_quarantined", False))
+                or isinstance(reservation.error, ProcessReapError)
+            )
+
+            # If shutdown was initiated and all launches, processes, and quarantines are settled, complete shutdown
             if self._shutdown_initiated and not self._shutdown_completed:
-                if not self._active_processes and not self._in_progress_launches:
+                if not self._active_processes and not self._in_progress_launches and not self._quarantined_locks:
                     self._shutdown_completed = True
                     self._shutdown_completed_event.set()
 
-        self._semaphore.release()
+            # Ensure capacity is released exactly once, and NEVER released if quarantined
+            if not is_quarantined and not reservation.capacity_released:
+                reservation.capacity_released = True
+                self._semaphore.release()
 
-    def _force_kill_and_reap(self, proc: subprocess.Popen) -> None:
+    def _force_kill_and_reap(self, proc: Any) -> None:
         """Forcefully terminate and reap a child process, closing all open pipe descriptors."""
         try:
             if proc.poll() is None:
@@ -550,12 +640,39 @@ class SkillProcessSupervisor:
             pass
 
         self._close_pipes(proc)
+        if isinstance(proc, SandboxedProcess):
+            if proc.poll() is None:
+                # Fallback Stage 2: Close Job Object handle to invoke kill-on-close escalation
+                if hasattr(proc, "job") and proc.job is not None:
+                    try:
+                        proc.job.close()
+                    except Exception as job_exc:
+                        logger.critical("Failed to close Job Object during abort escalation: %s", job_exc)
+                    try:
+                        proc.wait(timeout=self._cleanup_grace_period_seconds)
+                    except Exception:
+                        pass
+
+                if proc.poll() is None:
+                    with self._lock:
+                        self._quarantined_locks[proc.session_id] = proc.h_lock
+                    proc._quarantined = True
+                    logger.critical(
+                        "Sandboxed worker PID %s (session '%s') could NOT be confirmed dead! Quarantining.",
+                        proc.pid,
+                        proc.session_id,
+                    )
+                    return
+            proc.close()
 
     @staticmethod
-    def _close_pipes(proc: subprocess.Popen) -> None:
+    def _close_pipes(proc: Any) -> None:
         """Close open stdin/stdout/stderr pipes safely."""
-        for pipe in (proc.stdin, proc.stdout, proc.stderr):
-            if pipe is not None and not pipe.closed:
+        if hasattr(proc, "close_pipes"):
+            proc.close_pipes()
+            return
+        for pipe in (getattr(proc, "stdin", None), getattr(proc, "stdout", None), getattr(proc, "stderr", None)):
+            if pipe is not None and not getattr(pipe, "closed", True):
                 try:
                     pipe.close()
                 except Exception:
@@ -615,12 +732,14 @@ class SkillProcessSupervisor:
 
                 with self._lock:
                     unresolved = [res for res in self._in_progress_launches.values() if not res.completed]
-                    if unresolved or self._active_processes:
+                    if unresolved or self._active_processes or self._quarantined_locks:
                         logger.warning(
-                            "Shutdown timeout: %d launch reservation(s) still pending OS process creation and/or %d active processes remain. "
+                            "Shutdown timeout: %d launch reservation(s) still pending OS process creation, "
+                            "%d active processes remain, and/or %d quarantined session(s) unresolved. "
                             "Reservations will kill processes upon completion.",
                             len(unresolved),
                             len(self._active_processes),
+                            len(self._quarantined_locks),
                         )
                         return
 
