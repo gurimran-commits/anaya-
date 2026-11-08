@@ -42,7 +42,7 @@ from app.skills.staging import (
     stage_external_package,
 )
 from app.skills.skill_executor import SkillExecutor
-from app.skills.skill_manager import SkillManager
+from app.skills.skill_manager import SkillManager, SkillRefreshResult
 from app.skills.skill_registry import SkillRegistry
 from app.skills.supervisor import SkillProcessSupervisor, WORKER_SUPPORTED_SKILLS
 
@@ -55,6 +55,7 @@ __all__ = [
     "SkillStatus",
     "SkillRegistry",
     "SkillManager",
+    "SkillRefreshResult",
     "SkillExecutor",
     "SkillProcessSupervisor",
     "WORKER_SUPPORTED_SKILLS",

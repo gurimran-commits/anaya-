@@ -135,6 +135,11 @@ class SkillProcessSupervisor:
         self._shutdown_completed_event = threading.Event()
 
     @property
+    def skills_root(self) -> Path | None:
+        """Configured trusted skills root directory for external skill execution."""
+        return self._skills_root
+
+    @property
     def is_shutdown(self) -> bool:
         """True if shutdown has been initiated."""
         with self._lock:

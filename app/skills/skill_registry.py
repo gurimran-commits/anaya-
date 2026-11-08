@@ -139,6 +139,15 @@ class SkillRegistry:
                 return True
             return False
 
+    def get_external_skills(self) -> dict[str, "Skill"]:
+        """Return a snapshot copy of currently registered external skills keyed by clean skill ID."""
+        with self._lock:
+            return {
+                s_id: s
+                for s_id, s in self._skills.items()
+                if getattr(s, "is_external", False) or s_id.startswith("user.")
+            }
+
     def update_external_skills(
         self,
         external_skills: Sequence["Skill"],

@@ -64,6 +64,31 @@ def register_skill_commands(
 
         return result.message or "Skill executed successfully."
 
+    def refresh_skills() -> object:
+        result = skill_manager.refresh_skills()
+        if not result.success:
+            err = result.error or "Refresh failed."
+            if result.rejected:
+                reasons = "; ".join(f"{r.package_name}: {r.reason}" for r in result.rejected)
+                raise ValueError(f"Skill refresh failed: {err} (Rejections: {reasons})")
+            raise ValueError(f"Skill refresh failed: {err}")
+
+        parts = [
+            f"Skills refreshed (Generation {result.generation}): "
+            f"{len(result.added)} added, {len(result.updated)} updated, "
+            f"{len(result.removed)} removed, {len(result.unmodified)} unchanged."
+        ]
+        if result.retained_last_known_good:
+            parts.append(
+                f"Retained {len(result.retained_last_known_good)} last-known-good package(s) "
+                f"after malformed update ({', '.join(result.retained_last_known_good)})."
+            )
+        if result.rejected:
+            reasons = "; ".join(f"{r.package_name} ({r.error_code})" for r in result.rejected)
+            parts.append(f"Warning: {len(result.rejected)} package(s) rejected: {reasons}.")
+
+        return "\n".join(parts)
+
     if registry.get("skills.list") is None:
         registry.register(
             CommandSpec(
@@ -84,5 +109,15 @@ def register_skill_commands(
                     len(args) in (1, 2)
                     and all(isinstance(a, str) and bool(a.strip()) for a in args)
                 ),
+            )
+        )
+
+    if registry.get("skills.refresh") is None:
+        registry.register(
+            CommandSpec(
+                name="skills.refresh",
+                description="Rescan external skills directory and dynamically refresh registered skills",
+                handler=refresh_skills,
+                validate_arguments=lambda args: len(args) == 0,
             )
         )

@@ -312,6 +312,17 @@ class NaturalLanguageParser:
                 directory_index=directory_index,
             )
 
+        if registry.get("skills.refresh") and re.match(
+            r"^(?:please\s+)?(?:refresh|reload|update|rescan|scan\s+for)\s+skills[\.?!]?$",
+            text,
+            re.IGNORECASE,
+        ):
+            return IntentResolution(
+                status=IntentStatus.VALID,
+                intent=CommandIntent("skills.refresh", ()),
+                directory_index=directory_index,
+            )
+
         if registry.get("skills.run"):
             greet_with_skill_match = re.match(
                 r"^(?:please\s+)?greet\s+(?P<name>[\'\"][^\'\"]+[\'\"]|\S+)\s+(?:using|with)\s+(?:the\s+)?greeting\s+skill[\.!]?$",
@@ -601,6 +612,18 @@ class NaturalLanguageParser:
                 return IntentResolution(
                     status=IntentStatus.VALID,
                     intent=CommandIntent("skills.list", ()),
+                    directory_index=dir_idx,
+                )
+
+        if registry.get("skills.refresh"):
+            skills_refresh_pattern = re.compile(
+                r"^(?:please\s+)?(?:refresh|reload|update|rescan|scan\s+for)\s+skills[\.?!]?$",
+                re.IGNORECASE,
+            )
+            if skills_refresh_pattern.match(cleaned_text):
+                return IntentResolution(
+                    status=IntentStatus.VALID,
+                    intent=CommandIntent("skills.refresh", ()),
                     directory_index=dir_idx,
                 )
 

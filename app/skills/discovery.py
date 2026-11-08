@@ -196,6 +196,19 @@ class SkillDiscoveryResult:
                 return rej
         return None
 
+    @property
+    def root_error(self) -> RejectedPackage | None:
+        """Return the root-level rejection if the skills root itself failed verification."""
+        for rej in self.rejected:
+            if rej.package_path == str(self.root_path):
+                return rej
+        return None
+
+    @property
+    def is_root_error(self) -> bool:
+        """True if the discovery scan failed at the root level."""
+        return self.root_error is not None
+
 
 # =============================================================================
 # Windows Pinned Handle Operations

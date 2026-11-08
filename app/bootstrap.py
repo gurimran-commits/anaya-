@@ -221,6 +221,7 @@ def create_controller(
     kokoro_model_path: Path | str | None = None,
     kokoro_config_path: Path | str | None = None,
     kokoro_voices_dir: Path | str | None = None,
+    skills_root: Path | str | None = None,
 ) -> AssistantController:
     """Assemble and wire the complete Anaya assistant subsystem graph.
 
@@ -276,13 +277,34 @@ def create_controller(
         from app.skills.discovery import get_default_skills_root
         from app.skills.supervisor import SkillProcessSupervisor
 
-        trusted_skills_root = get_default_skills_root()
+        trusted_skills_root = Path(skills_root).resolve() if skills_root is not None else get_default_skills_root()
         skill_supervisor = SkillProcessSupervisor(skills_root=trusted_skills_root)
         skill_manager = SkillManager(
             approval_service=shared_approval_service,
             skill_permission_grants=effective_grants,
             supervisor=skill_supervisor,
+            skills_root=trusted_skills_root,
         )
+
+        # Initial external skill discovery
+        try:
+            init_res = skill_manager.refresh_skills()
+            if init_res.success:
+                active_count = len(init_res.unmodified) + len(init_res.added)
+                if active_count > 0 or init_res.rejected:
+                    logger.info(
+                        "External skills initialized: %d active (%d added, %d rejected).",
+                        active_count,
+                        len(init_res.added),
+                        len(init_res.rejected),
+                    )
+            else:
+                logger.warning(
+                    "Initial external skills discovery completed with warning: %s",
+                    init_res.error,
+                )
+        except Exception as exc:
+            logger.warning("Initial external skills discovery encountered an error: %s", exc)
 
         # 4. Local AI Subsystem (Lazy)
         # Does not connect or load models during bootstrap.

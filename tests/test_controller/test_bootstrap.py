@@ -49,7 +49,6 @@ def test_bootstrap_shared_approval_service_identity(temp_paths):
     finally:
         controller.stop()
 
-
 def test_bootstrap_single_instance_dependency_ownership(temp_paths):
     """Verify stateful subsystems are singletons owned by their authoritative containers."""
     controller = create_controller(
@@ -78,7 +77,6 @@ def test_bootstrap_single_instance_dependency_ownership(temp_paths):
     finally:
         controller.stop()
 
-
 def test_bootstrap_registers_filesystem_commands_when_configured(temp_paths):
     """When allowed_directories is supplied, filesystem commands are registered."""
     temp_paths["files_dir"].mkdir()
@@ -98,7 +96,6 @@ def test_bootstrap_registers_filesystem_commands_when_configured(temp_paths):
     finally:
         controller.stop()
 
-
 def test_bootstrap_without_filesystem_commands(temp_paths):
     """When allowed_directories is None, filesystem service is omitted without error."""
     controller = create_controller(
@@ -113,7 +110,6 @@ def test_bootstrap_without_filesystem_commands(temp_paths):
         assert controller.filesystem_service is None
     finally:
         controller.stop()
-
 
 def test_bootstrap_with_custom_speech_adapters(temp_paths):
     """Verify custom speech adapters are wired cleanly into VoicePipeline."""
@@ -141,7 +137,6 @@ def test_bootstrap_with_custom_speech_adapters(temp_paths):
     finally:
         controller.stop()
 
-
 def test_bootstrap_disabled_speech_mode(temp_paths):
     """When speech is disabled, bootstrap succeeds and controller operates in text-only mode."""
     controller = create_controller(
@@ -158,7 +153,6 @@ def test_bootstrap_disabled_speech_mode(temp_paths):
     finally:
         controller.stop()
 
-
 def test_bootstrap_disabled_ai_mode(temp_paths):
     """When AI is disabled via config or parameter, ModelManager is omitted."""
     config = AppConfig(ai_enabled=False)
@@ -173,7 +167,6 @@ def test_bootstrap_disabled_ai_mode(temp_paths):
         assert controller.text_assistant.model_manager is None
     finally:
         controller.stop()
-
 
 def test_bootstrap_partial_initialization_failure_cleans_up(temp_paths, monkeypatch):
     """If bootstrap fails midway, already-opened resources (e.g. MemoryStore) are closed."""
@@ -247,3 +240,42 @@ def test_bootstrap_rollback_closes_resources_in_reverse_order(temp_paths, monkey
 
     # Must close in reverse order of creation: filesystem -> runtime -> memory
     assert call_order == ["filesystem", "runtime", "memory"]
+
+
+def test_bootstrap_initial_external_skills_discovery(temp_paths, tmp_path: Path):
+    """External skills in skills_root are discovered and registered during bootstrap."""
+    import json
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    pkg_dir = skills_dir / "boot_tool"
+    pkg_dir.mkdir()
+    manifest = {
+        "schema_version": 1,
+        "id": "user.boot_tool",
+        "name": "Boot Tool",
+        "description": "Discovered on bootstrap",
+        "version": "1.0.0",
+        "entrypoint": "main:MySkill",
+    }
+    (pkg_dir / "skill.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (pkg_dir / "main.py").write_text("pass", encoding="utf-8")
+
+    controller = create_controller(
+        memory_db_path=temp_paths["mem_db"],
+        tasks_db_path=temp_paths["tasks_db"],
+        enable_speech=False,
+        enable_ai=False,
+        skills_root=skills_dir,
+    )
+    try:
+        assert controller.skill_manager is not None
+        skill = controller.skill_manager.get_skill("user.boot_tool")
+        assert skill is not None
+        assert skill.metadata.name == "Boot Tool"
+
+        # Visible via text command
+        res = controller.handle_text("skills.list")
+        assert res.success is True
+        assert "user.boot_tool" in res.message
+    finally:
+        controller.stop()
