@@ -1,27 +1,28 @@
 # Anaya — Project Status and Roadmap
 
-**Document Version:** 1.0.0  
-**Repository State:** Post-Phase 8B Completion  
-**Latest Release Commit:** `3026d3d`  
-**Branch:** `master` (synchronized with `origin/master`)  
-**Latest Verification:** 535 passed, 6 skipped, 0 failed (541 total items)  
+**Document Version:** 1.2.0\
+**Repository State:** Post-Phase 10 Completion\
+**Latest Release Commit:** `d7b223a`\
+**Branch:** `master` (synchronized with `origin/master`)\
+**Latest Verification:** 1,158 passed, 15 skipped, 0 failed (1,173 total items)
 
 ---
 
 ## 1. Project Vision
 
-Anaya is an open-source, local-first personal AI assistant engineered for desktop operating systems. The project provides an autonomous, privacy-respecting companion capable of voice and text interaction, persistent knowledge retention, reliable task scheduling with desktop reminders, modular extensibility through skills, and private LLM inference via Ollama.
+Anaya is an open-source, local-first personal AI assistant engineered for desktop operating systems. The project provides an autonomous, privacy-respecting companion capable of voice and text interaction, persistent knowledge retention, reliable task scheduling with desktop reminders, modular extensibility through sandboxed external skills, and private LLM inference via Ollama.
 
 ### Core Distinctions
 - **Zero Cloud Dependence:** Complete offline operation without telemetry, remote API keys, or data harvesting.
 - **Deterministic Security Barrier:** Strict boundary separating generative text from deterministic command execution and approval consumption.
+- **Multi-Layered Sandbox Isolation:** External skills execute strictly out-of-process in isolated Windows AppContainers under Job Object resource limits, with handle-relative filesystem traversal, read-only staging, and zero network access.
 - **Lightweight & Efficient:** Written in pure, modern Python (3.12+) with SQLite backing, minimal dependencies, and push-to-talk bounded audio.
 
 ---
 
-## 2. Completed Original Roadmap (Phases 0–8)
+## 2. Completed Architecture Roadmap (Phases 0–10)
 
-The initial architectural roadmap of Anaya has been completely built, hardened, verified, and merged into `master`.
+The foundational architecture through desktop integration and out-of-process skill sandboxing has been completely built, hardened, verified, and merged into `master`.
 
 | Phase | Milestone | Primary Capabilities Delivered | Status |
 | :---: | :--- | :--- | :---: |
@@ -35,44 +36,56 @@ The initial architectural roadmap of Anaya has been completely built, hardened, 
 | **7B** | **Runtime & Reminder Integration** | `AnayaRuntime` coordinator, notification interfaces, transactional at-most-once claims, startup missed-reminder recovery, and worker safety. | **Completed & Verified** |
 | **8A** | **Controller & Application Entry** | `AssistantController` unified facade, dependency-injected `app/bootstrap.py`, and interactive text REPL in `app/main.py`. | **Completed & Verified** |
 | **8B** | **End-to-End System Validation** | Deterministic E2E test harness (`tests/test_e2e/`), CLI tests, persistence tests, scheduler tests, security tests, and lifecycle fixes. | **Completed & Verified** |
+| **9** | **Desktop Native Services** | `WindowsTrayService`, `WindowsToastNotificationHandler`, `WindowsGlobalHotkeyService`, floating assistant HUD, and desktop coordinator integration. | **Completed & Verified** |
+| **10** | **Out-of-Process Skill Sandbox** | Isolated worker IPC (10.1), process supervisor (10.2), Job Objects (10.3.1), AppContainer infrastructure (10.3.2), process launcher (10.3.3), manifest parser (10.4.1), filesystem discovery (10.4.2), secure staging & execution (10.4.3), and dynamic refresh (10.4.4). | **Completed & Verified** |
 
 ---
 
-## 3. Phase 8A and 8B Detailed Release History
+## 3. Detailed Release History (Phases 8–10)
 
-Phase 8 established production-grade application integration and rigorous end-to-end verification.
+### Phase 8 — Production Integration & E2E Validation (`3026d3d`)
+1. **Application Bootstrap & Controller (`2f16fac`)**:
+   - `app/bootstrap.py`: Unified dependency injection ensuring single authoritative `ApprovalService`, lazy AI connections, and zero standing audio threads.
+   - `app/controller.py`: Unified `AssistantController` routing text, voice, and audio inputs strictly through `TextAssistant`.
+2. **Text CLI Entry Point (`23db757`)**:
+   - `app/main.py`: Interactive REPL with clean exit (`exit`, `quit`, `:q`), EOF (`Ctrl+D`), and sanitized error outputs.
+3. **E2E Infrastructure & Coverage (`47b74f4`, `d997985`, `fede601`, `835bcf6`, `3026d3d`)**:
+   - Deterministic test harness with `FakeClock` and `RecordingNotificationHandler`.
+   - Scheduler worker hang fix preserving `TaskStore` during delayed termination.
+   - Fail-closed capability gates in `SkillExecutor` and configuration immutability via `FrozenDict`.
 
-```text
-3026d3d (HEAD -> master, origin/master) Add scheduler and security E2E coverage
-d997985 Add CLI and persistence E2E coverage
-835bcf6 Enforce fail-closed skill capability permissions
-fede601 Fix controller and scheduler shutdown lifecycle
-47b74f4 Add E2E test infrastructure and fixtures
-23db757 Implement text-based CLI application entry point
-2f16fac Implement assistant controller and application bootstrap
-```
+### Phase 9 — Desktop Native Services (`17e0c5b`)
+1. **Windows System Tray & Notifications (`d2787b2`, `a48f991`)**:
+   - `WindowsTrayService`: Background tray icon with contextual menus, KB131501 focus handling, Explorer restart recovery, and thread-safe dispatch.
+   - `WindowsToastNotificationHandler`: Native Windows Action Center toasts with thread-safe queueing.
+2. **Global Hotkey & Floating HUD (`7bf2a5c`, `39895cc`, `be8b87b`)**:
+   - `WindowsGlobalHotkeyService`: Low-level keyboard hook registering push-to-talk hotkeys with serialized toggle processing.
+   - `FloatingAssistantHUD`: Non-blocking floating status widget displaying transcription, AI thinking, and approval prompts.
+3. **Desktop Coordinator & Lifecycle (`e7f5605`, `6696075`, `17e0c5b`)**:
+   - Unified desktop service lifecycle with clean startup sequencing, graceful degradation in headless environments, and audio pipeline routing.
 
-### Key Milestones Delivered in Phase 8
-
-1. **Step 8A.1 — Application Bootstrap & AssistantController (`2f16fac`)**:
-   - `app/bootstrap.py`: Constructs exactly one shared instance of each stateful subsystem. Ensures a single authoritative `ApprovalService` across commands and skills. Guarantees zero standing audio threads or eager model pulls.
-   - `app/controller.py`: Exposes a unified interface (`handle_text`, `handle_voice`, `handle_audio`, `speak`, `start`, `stop`) routing all inputs strictly through `TextAssistant`.
-2. **Step 8A.2 — Text CLI Entry Point (`23db757`)**:
-   - `app/main.py`: Interactive REPL supporting clean exit commands (`exit`, `quit`, `:q`), EOF (`Ctrl+D`), interrupt (`Ctrl+C`), and sanitized error reporting without secret leakage.
-3. **Step 8B.2A — E2E Test Infrastructure (`47b74f4`)**:
-   - `tests/test_e2e/conftest.py`: Introduced `FakeClock` for deterministic time travel, `RecordingNotificationHandler` for event-synchronized reminder assertions, and `e2e_controller_factory` for automated reverse-order cleanup.
-4. **Step 8B.2B & 2C — CLI & Persistence E2E Coverage (`d997985`)**:
-   - `tests/test_e2e/test_e2e_cli.py`: 14 tests validating REPL lifecycle, input pipelines, error sanitization, text-only mode invariants, and AI boundary containment.
-   - `tests/test_e2e/test_e2e_persistence.py`: 6 tests verifying tasks and memories across controller restarts, state transitions, binary serialization survival, and database path isolation.
-5. **Step 8B.2D — Scheduler E2E Coverage & Worker Hang Fix (`fede601`, `3026d3d`)**:
-   - Fixed a shutdown defect where hung scheduler worker threads left `TaskStore` open but marked the controller cleanly stopped.
-   - `AssistantController.stop()` now defers setting `_cleanly_stopped = True` until the worker thread actually terminates, preserving `TaskStore` open safely and allowing repeated shutdown calls to finish cleanup.
-   - `tests/test_e2e/test_e2e_scheduler.py`: 9 tests verifying due reminder delivery, timing, at-most-once deduplication, missed reminder recovery on startup, and worker hang handling.
-6. **Step 8B.2E — Security E2E Coverage, Capability Gates & Immutability (`835bcf6`, `3026d3d`)**:
-   - Resolved an audit defect where declared skill permissions (`READ_ONLY`, `FILESYSTEM`) were not checked by `SkillExecutor`.
-   - Implemented fail-closed capability gates in `SkillExecutor` evaluated prior to approval requests or code invocation.
-   - Added `FrozenDict` to `app/core/config.py` to recursively freeze `skill_permission_grants`, blocking in-place `|=` mutation while preserving `dataclasses.asdict()`, `json.dumps()`, and `copy.deepcopy()` compatibility.
-   - `tests/test_e2e/test_e2e_security.py`: 13 tests verifying invalid command injection, single-use approval tokens, path traversal sandboxing, AI output isolation, fail-closed capability gating, and configuration immutability.
+### Phase 10 — Out-of-Process Skill Sandbox & Security Isolation (`d7b223a`)
+1. **Subphase 10.1 — Isolated Worker IPC Protocol (`5b772d0`)**:
+   - `app/skills/protocol.py`: Strict, versioned JSON IPC wire protocol. Custom decoder rejecting duplicate keys (`DuplicateKeyError`), `NaN`, and `Infinity`. Message sizes strictly bounded to `MAX_MESSAGE_BYTES = 1_048_576` (1 MiB).
+2. **Subphase 10.2 — Isolated Skill Process Supervisor (`566dd0a`)**:
+   - `app/skills/supervisor.py`: Concurrency bounding via `threading.Semaphore`, request deduplication, session lifecycle tracking, and graceful two-stage process termination.
+3. **Subphase 10.3.1 — Windows Job Object Resource Controls (`0b0585f`)**:
+   - `app/skills/sandbox/win32_job.py`: Job Object resource limits enforcing `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, `JOB_OBJECT_LIMIT_ACTIVE_PROCESS (1)`, `JOB_OBJECT_LIMIT_PROCESS_MEMORY (256 MiB)`, and `JOB_OBJECT_LIMIT_JOB_MEMORY (512 MiB)`.
+4. **Subphase 10.3.2 — Windows AppContainer Infrastructure (`ae4655f`)**:
+   - `app/skills/sandbox/appcontainer.py` & `runtime_provisioner.py`: AppContainer profile creation, SID derivation, per-execution scratch directory provisioning, and session quarantine on unconfirmed process termination.
+5. **Subphase 10.3.3 — Sandboxed Process Launcher (`273f483`)**:
+   - `app/skills/sandbox/process_launcher.py`: Launches workers suspended (`CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT`), attaches Job Objects and security capabilities before resume, and verifies handle-relative process metadata.
+6. **Subphase 10.4.1 — External Skill Manifest Parser (`5396f12`)**:
+   - `app/skills/manifest.py`: Strict JSON schema validation, semver parsing, entrypoint module syntax validation, and input field specification bounds. Manifest size strictly capped at `MAX_MANIFEST_BYTES = 65_536` (64 KiB).
+7. **Subphase 10.4.2 — External Skill Filesystem Discovery (`a484573`)**:
+   - `app/skills/discovery.py`: Handle-anchored directory scanning via `NtCreateFile` (`_open_verified_root_windows`), virtual MS-DOS substitution drive (`subst`) rejection, reparse-point rejection, descriptor-relative manifest reading, and `ExternalSkillProxy` construction.
+8. **Subphase 10.4.3 — Secure Package Staging & Sandboxed Execution (`aef5741`)**:
+   - `app/skills/staging.py`: Immutable snapshot copying into session scratch, pre/post read `fstat` mutation detection, module shadowing rejection (`sys`, `os`, `app`, etc.), and read-only DACL enforcement.
+   - Remediated supervisor to completely eliminate unsandboxed fallback execution; non-sandboxed external execution fails closed immediately.
+9. **Subphase 10.4.4 — Dynamic Skill Refresh & Application Integration (`d7b223a`)**:
+   - `app/skills/skill_manager.py` & `skill_registry.py`: Dynamic `refresh_skills()` with delta tracking (`added`, `updated`, `removed`, `unmodified`).
+   - Retains previously registered last-known-good proxies on malformed updates; preserves the entire registry on root-level access failures.
+   - Synchronous discovery during bootstrap, `skills.refresh` CLI command, and natural language intent routing.
 
 ---
 
@@ -102,77 +115,86 @@ fede601 Fix controller and scheduler shutdown lifecycle
 | **Local AI (Ollama)** | **Complete** | **Verified (Unit & Mock)** | Hardware profiling, dynamic model switching, lazy connection. |
 | **Text REPL CLI (`main.py`)** | **Complete** | **Verified (Unit & E2E)** | Clean lifecycle, EOF handling, sanitized error reporting. |
 | **AssistantController Facade** | **Complete** | **Verified (Unit & E2E)** | Unified lifecycle and subsystem routing. |
+| **Windows System Tray Service** | **Complete** | **Verified (Unit & Mock)** | Background tray icon with focus handling and restart recovery. |
+| **Windows Toast Notifications** | **Complete** | **Verified (Unit & Mock)** | Action Center toast delivery with thread-safe queueing. |
+| **Windows Global Hotkey Service** | **Complete** | **Verified (Unit & Mock)** | Low-level keyboard hook for push-to-talk capture. |
+| **Floating Assistant HUD** | **Complete** | **Verified (Unit & Mock)** | Non-blocking floating status window. |
+| **Isolated Worker IPC Protocol** | **Complete** | **Verified (Unit & Integ)** | Versioned JSON protocol, 1 MiB message limit, duplicate key rejection. |
+| **Skill Process Supervisor** | **Complete** | **Verified (Unit & Integ)** | Concurrency bounding, request deduplication, session quarantine. |
+| **Windows Job Object Limits** | **Complete** | **Verified (Unit & Integ)** | Process/job memory caps (256/512 MiB), kill-on-close. |
+| **Windows AppContainer Sandbox** | **Complete** | **Verified (Unit & Integ)** | Zero network capability, isolated per-session scratch ACLs. |
+| **External Skill Manifest Parser** | **Complete** | **Verified (Unit)** | Strict schema, semver, input validation, 64 KiB manifest limit. |
+| **External Skill Discovery** | **Complete** | **Verified (Unit & Integ)** | NtCreateFile handle-relative traversal, reparse point rejection. |
+| **Secure Package Staging** | **Complete** | **Verified (Unit & Integ)** | Snapshot copy, mutation detection, read-only DACL enforcement. |
+| **Dynamic Skill Refresh** | **Complete** | **Verified (Unit & E2E)** | Delta tracking, retained last-known-good, synchronous bootstrap scan. |
+| **Cross-Platform Sandbox Gate** | **Complete** | **Verified (Unit & Integ)** | Windows: AppContainer sandbox. Linux/macOS: fails closed. |
 
 ---
 
 ## 5. Test Verification Results
 
 ### Test Suite Summary
-- **Total Test Items:** **541**
-- **Passed:** **535**
-- **Skipped:** **6**
+- **Total Test Items:** **1,173**
+- **Passed:** **1,158**
+- **Skipped:** **15**
 - **Failed:** **0**
-- **Execution Time:** ~10.0 seconds
+- **Execution Time:** ~65.0 seconds
 
-### Skipped Tests Breakdown
-1. **`tests/test_e2e/test_e2e_security.py::test_filesystem_symlink_containment_and_rejection`**:
-   - *Reason:* Windows requires `SeCreateSymbolicLinkPrivilege` or Developer Mode to create symlinks (`[WinError 1314]`). The test detects this host limitation and skips with an informative alert.
-2. **`tests/test_command_validator.py` (1 test)** & **`tests/test_filesystem.py` (4 tests)**:
-   - *Reason:* Platform-specific Windows path formatting checks (e.g., POSIX-specific root checks or device path validations) that skip safely on non-POSIX hosts.
+### Skipped Tests Breakdown (15 Total)
+1. **Symbolic Link Creation Privileges (12 tests)**:
+   - *Tests:* `test_e2e_security.py` (1), `test_command_validator.py` (1), `test_filesystem.py` (4), `test_sandbox_session.py` (1), `test_skill_discovery.py` (2), `test_skill_staging.py` (2), `test_skill_staging.py` (1 POSIX-specific).
+   - *Reason:* Windows requires `SeCreateSymbolicLinkPrivilege` or Developer Mode to create symbolic links (`[WinError 1314]`). In unprivileged environments, these tests detect the limitation and skip with an informative alert.
+2. **Network Isolation Policy Timeouts (3 tests)**:
+   - *Tests:* `test_sandbox_launcher.py` (loopback, private network, DNS resolution).
+   - *Reason:* On certain Windows host configurations, firewall policies drop AppContainer network packets resulting in connection timeouts rather than immediate `WSAEACCES` denials. The test suite explicitly distinguishes socket timeouts from policy assertions to avoid inconclusive results.
 
 ---
 
 ## 6. Known Limitations & Technical Debt
 
-1. **In-Process Skill Execution Sandbox:**
-   - Skills execute in-process within the main Python runtime.
-   - *Limitation:* Permissions (`READ_ONLY`, `FILESYSTEM`) are application execution gates, not OS-level sandboxes. A malicious native extension or untrusted Python script could circumvent runtime checks.
-   - *Remediation:* Migrate to out-of-process worker processes (e.g., subprocesses with restricted OS privileges or containerized microVMs).
+1. **Platform-Specific Sandboxing (Windows AppContainer):**
+   - The out-of-process skill sandbox is fully implemented for Windows 10/11 (build >= 19041) leveraging native AppContainer profiles and Win32 Job Objects.
+   - *Limitation:* Linux and macOS lack equivalent AppContainer APIs. On Linux and macOS, external skill execution currently fails closed (`platform_unavailable` / `sandbox_unavailable`).
+   - *Remediation:* Implement a Linux sandbox backend using `seccomp`, `unshare` (user/mount/network namespaces), and `cgroups` in a future cross-platform expansion.
 2. **Single Background Scheduler Worker Thread:**
    - Reminders are polled and dispatched sequentially by a single background thread.
-   - *Limitation:* If a notification handler (e.g., a synchronous webhook or long audio playback) blocks, subsequent reminder evaluations are delayed.
+   - *Limitation:* If a notification handler blocks, subsequent reminder evaluations are delayed.
    - *Remediation:* Offload notification dispatching to a concurrent worker pool (`ThreadPoolExecutor`).
 3. **Advanced Recurring Tasks:**
    - Recurring tasks currently rely on basic interval or daily triggers.
    - *Limitation:* Complex RRULE patterns (e.g., "every second Tuesday of the month", "weekdays only excluding holidays") are not yet supported.
+   - *Remediation:* Integrate RFC 5545 recurrence rules (planned for Phase 11).
 4. **Natural Language Parser Phrasing Breadth:**
    - `NaturalLanguageParser` uses regular expressions and heuristic token extraction.
    - *Limitation:* Highly colloquial or compound requests that fall outside established regexes fail to extract structured arguments and drop through to conversational LLM fallback.
 
 ---
 
-## 7. Proposed Future Roadmap (Phases 9–11: Proposed Only, Not Approved or Implemented)
+## 7. Verified Resource & Staging Limits
+
+To ensure system stability and prevent denial-of-service, Phase 10 enforces verified constants across IPC, staging, and execution:
+
+| Scope | Constant Name | Implemented Value | Location | Description |
+| :--- | :--- | :---: | :--- | :--- |
+| **IPC Message** | `MAX_MESSAGE_BYTES` | `1_048_576` (1 MiB) | `app/skills/protocol.py` | Maximum size for JSON requests and responses over stdin/stdout. |
+| **Manifest** | `MAX_MANIFEST_BYTES` | `65_536` (64 KiB) | `app/skills/manifest.py` | Maximum file size for `skill.json` manifest. |
+| **Package File** | `MAX_SOURCE_FILE_BYTES` | `262_144` (256 KiB) | `app/skills/staging.py` | Maximum size for an individual source file in an external package. |
+| **Total Package** | `MAX_TOTAL_PACKAGE_BYTES`| `2_097_152` (2 MiB) | `app/skills/staging.py` | Maximum cumulative size of all files in an external skill package. |
+| **File Count** | `MAX_STAGED_FILES` | `50` | `app/skills/staging.py` | Maximum number of files permitted in a single package. |
+| **Dir Depth** | `MAX_STAGING_DEPTH` | `3` | `app/skills/staging.py` | Maximum directory hierarchy depth within an external package. |
+| **Package Limit** | `MAX_PACKAGE_DIRECTORIES`| `100` | `app/skills/discovery.py` | Maximum external package directories scanned under skills root. |
+| **Stderr Log** | `MAX_STDERR_BYTES` | `65_536` (64 KiB) | `app/skills/supervisor.py` | Maximum diagnostic error output collected from worker stderr. |
+| **Worker RAM** | `process_memory_limit_bytes` | `268_435_456` (256 MiB) | `app/skills/sandbox/win32_job.py` | Per-process committed memory ceiling enforced by Job Object. |
+| **Job RAM** | `job_memory_limit_bytes` | `536_870_912` (512 MiB) | `app/skills/sandbox/win32_job.py` | Total aggregate memory ceiling enforced by Job Object. |
+| **Active Procs** | `active_process_limit` | `1` | `app/skills/sandbox/win32_job.py` | Blocks worker from spawning unauthorized child processes. |
+| **Concurrency** | `DEFAULT_MAX_CONCURRENT_WORKERS` | `4` | `app/skills/supervisor.py` | Maximum simultaneous worker processes managed by supervisor. |
+
+---
+
+## 8. Proposed Future Roadmap (Phase 11: Proposed Only, Not Approved or Implemented)
 
 > [!IMPORTANT]
-> The following phases represent **proposed future architectural concepts**. They are **not approved, not scheduled, and not implemented**. All authorized development to date concluded with the completion and release of Phase 8B (`3026d3d`).
-
-With the core foundational architecture (Phases 0–8B) completely verified, the following phases outline potential future enhancements for advanced desktop capabilities and extended autonomy.
-
-### Proposed Phase 9: Desktop Integration & Native User Interface (Proposed)
-
-- **Objective:** Provide a native, unobtrusive desktop presence beyond the terminal REPL.
-- **Milestones:**
-  1. **System Tray Application (`app/ui/tray.py`):**
-     - Background daemon with system tray icon (Windows, macOS, Linux).
-     - Global hotkey listener (e.g., `Ctrl+Space` or `Win+Space`) to trigger push-to-talk voice capture.
-     - Visual state indicator (idle, listening, thinking, speaking).
-  2. **Native OS Desktop Notifications (`app/notifications/desktop.py`):**
-     - Native toast notification adapters replacing or complementing terminal logging (Windows Action Center, macOS Notification Center, Linux libnotify).
-     - Actionable notification buttons ("Mark Complete", "Snooze 10m").
-  3. **Minimalist Desktop Floating HUD / Window:**
-     - Non-intrusive floating HUD widget displaying transcribed text, AI responses, and approval confirmation dialogs.
-
-### Proposed Phase 10: Out-of-Process Skill Sandbox & Security Isolation (Proposed)
-
-- **Objective:** Elevate skill security from application-level execution gates to true process-isolated sandboxes.
-- **Milestones:**
-  1. **Subprocess Skill Worker (`app/skills/worker.py`):**
-     - Execute skills in isolated child processes communicating via JSON-RPC / IPC pipes.
-     - Enforce process-level memory, CPU, and execution timeout limits.
-  2. **Restricted OS Capabilities:**
-     - Restrict child process filesystem and network access at the operating system level (Windows AppContainer or Linux seccomp/namespaces).
-  3. **Dynamic Skill Loading & Package Discovery:**
-     - Safe discovery and loading of user skills from `~/.anaya/skills/` without requiring restart.
+> The following phase represents **proposed future architectural concepts**. It is **not approved, not scheduled, and not implemented**. All authorized development to date concluded with the completion, verification, and closure of Phase 10 (`d7b223a`).
 
 ### Proposed Phase 11: Advanced Calendar, Recurrence & Multi-Modal Context (Proposed)
 
@@ -187,7 +209,7 @@ With the core foundational architecture (Phases 0–8B) completely verified, the
 
 ---
 
-## 8. Dependencies & Environmental Risks
+## 9. Dependencies & Environmental Risks
 
 1. **Local Ollama Daemon Availability:**
    - While Anaya functions gracefully in text-only command mode without Ollama, conversational fallback and natural language Q&A depend on a locally running Ollama instance (`localhost:11434`).
