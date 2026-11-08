@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from app.skills.models import Skill, SkillMetadata, SkillPermission, SkillResult
@@ -64,6 +64,17 @@ class SkillManager:
     def register_skill(self, skill: Skill) -> None:
         """Register a new trusted skill."""
         self._registry.register(skill)
+
+    def update_external_skills(
+        self,
+        external_skills: Sequence[Skill],
+        expected_generation: int | None = None,
+    ) -> int:
+        """Atomically replace external skills in the underlying registry."""
+        return self._registry.update_external_skills(
+            external_skills,
+            expected_generation=expected_generation,
+        )
 
     def unregister_skill(self, skill_id: str) -> bool:
         """Unregister a skill by ID."""

@@ -27,6 +27,15 @@ from app.skills.manifest import (
     load_skill_manifest,
     parse_skill_manifest,
 )
+from app.skills.discovery import (
+    ExternalSkillProxy,
+    RejectedPackage,
+    SkillDiscoveryResult,
+    discover_external_skills,
+    get_default_skills_root,
+    register_external_skills,
+    scan_and_register_external_skills,
+)
 from app.skills.skill_executor import SkillExecutor
 from app.skills.skill_manager import SkillManager
 from app.skills.skill_registry import SkillRegistry
@@ -62,4 +71,11 @@ __all__ = [
     "ManifestValidationError",
     "parse_skill_manifest",
     "load_skill_manifest",
+    "ExternalSkillProxy",
+    "RejectedPackage",
+    "SkillDiscoveryResult",
+    "discover_external_skills",
+    "get_default_skills_root",
+    "register_external_skills",
+    "scan_and_register_external_skills",
 ]
