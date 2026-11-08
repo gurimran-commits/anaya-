@@ -19,6 +19,7 @@ from app.skills.models import SkillResult
 PROTOCOL_VERSION: str = "1.0"
 MAX_MESSAGE_BYTES: int = 1_048_576  # 1 MB maximum message payload
 MAX_ID_LENGTH: int = 128
+MAX_ENTRYPOINT_LENGTH: int = 128
 MAX_NESTING_DEPTH: int = 32
 MIN_TIMEOUT_SECONDS: float = 0.1
 MAX_TIMEOUT_SECONDS: float = 300.0
@@ -26,6 +27,7 @@ DEFAULT_TIMEOUT_SECONDS: float = 10.0
 
 # Conservative allowlist for safe identifier names (alphanumerics, dots, colons, underscores, hyphens)
 IDENTIFIER_PATTERN: re.Pattern[str] = re.compile(r"^[a-zA-Z0-9_.:-]+$")
+PYTHON_IDENTIFIER_PATTERN: re.Pattern[str] = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
 class MessageType(str, Enum):
@@ -147,6 +149,7 @@ class ExecuteRequest:
     skill_id: str
     inputs: dict[str, Any]
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+    entrypoint: str | None = None
     protocol_version: str = PROTOCOL_VERSION
     message_type: str = MessageType.EXECUTE_REQUEST.value
 
@@ -162,6 +165,25 @@ class ExecuteRequest:
 
         validate_identifier(self.request_id, "request_id")
         validate_identifier(self.skill_id, "skill_id")
+
+        if self.entrypoint is not None:
+            if not isinstance(self.entrypoint, str) or not self.entrypoint.strip():
+                raise ProtocolValidationError("entrypoint must be a non-empty string or None.")
+            if len(self.entrypoint) > MAX_ENTRYPOINT_LENGTH:
+                raise ProtocolValidationError(
+                    f"entrypoint exceeds maximum length of {MAX_ENTRYPOINT_LENGTH} characters."
+                )
+            if any(c.isspace() for c in self.entrypoint):
+                raise ProtocolValidationError("entrypoint must not contain whitespace.")
+            if ":" not in self.entrypoint:
+                raise ProtocolValidationError("entrypoint must follow 'module:ClassName' format.")
+            ep_parts = self.entrypoint.split(":")
+            if len(ep_parts) != 2:
+                raise ProtocolValidationError("entrypoint must contain exactly one colon ('module:ClassName').")
+            if not PYTHON_IDENTIFIER_PATTERN.fullmatch(ep_parts[0]):
+                raise ProtocolValidationError(f"Invalid module name in entrypoint: '{ep_parts[0]}'.")
+            if not PYTHON_IDENTIFIER_PATTERN.fullmatch(ep_parts[1]):
+                raise ProtocolValidationError(f"Invalid class name in entrypoint: '{ep_parts[1]}'.")
 
         if not isinstance(self.inputs, dict):
             raise ProtocolValidationError("inputs must be a dictionary.")
@@ -312,6 +334,9 @@ def encode_request(request: ExecuteRequest) -> str:
         "inputs": request.inputs,
         "timeout_seconds": float(request.timeout_seconds),
     }
+    if request.entrypoint is not None:
+        payload["entrypoint"] = request.entrypoint
+
     encoded = json.dumps(payload, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
     if len(encoded.encode("utf-8")) > MAX_MESSAGE_BYTES:
         raise ProtocolSizeError(f"Encoded request exceeds maximum allowed size of {MAX_MESSAGE_BYTES} bytes.")
@@ -343,7 +368,7 @@ def decode_request(raw_message: str | bytes) -> ExecuteRequest:
     if not isinstance(data, dict):
         raise ProtocolValidationError("Top-level message payload must be a JSON object.")
 
-    expected_keys = {
+    required_keys = {
         "protocol_version",
         "message_type",
         "request_id",
@@ -351,11 +376,12 @@ def decode_request(raw_message: str | bytes) -> ExecuteRequest:
         "inputs",
         "timeout_seconds",
     }
-    missing_keys = expected_keys - set(data.keys())
+    allowed_keys = required_keys | {"entrypoint"}
+    missing_keys = required_keys - set(data.keys())
     if missing_keys:
         raise ProtocolValidationError(f"Missing required field(s) in request: {sorted(missing_keys)}.")
 
-    extra_keys = set(data.keys()) - expected_keys
+    extra_keys = set(data.keys()) - allowed_keys
     if extra_keys:
         raise ProtocolValidationError(f"Unexpected field(s) in request: {sorted(extra_keys)}.")
 
@@ -364,6 +390,7 @@ def decode_request(raw_message: str | bytes) -> ExecuteRequest:
         skill_id=data["skill_id"],
         inputs=data["inputs"],
         timeout_seconds=data["timeout_seconds"],
+        entrypoint=data.get("entrypoint"),
         protocol_version=data["protocol_version"],
         message_type=data["message_type"],
     )

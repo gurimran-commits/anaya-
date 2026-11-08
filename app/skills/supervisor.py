@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 import os
+from pathlib import Path
 import subprocess
 import sys
 import threading
@@ -69,6 +70,8 @@ class LaunchReservation:
     completed: bool = False
     capacity_released: bool = False
     quarantined: bool = False
+    package_path: Any | None = None
+    temp_scratch_dir: Any | None = None
 
 
 class SkillProcessSupervisor:
@@ -85,12 +88,14 @@ class SkillProcessSupervisor:
         session_registry: SessionRegistry | None = None,
         launcher: SandboxedProcessLauncher | None = None,
         use_sandbox: bool | None = None,
+        skills_root: Path | str | None = None,
     ) -> None:
         self._python_executable = python_executable or sys.executable
         self._max_concurrent_workers = max_concurrent_workers
         self._startup_timeout_seconds = startup_timeout_seconds
         self._transmission_timeout_seconds = transmission_timeout_seconds
         self._cleanup_grace_period_seconds = cleanup_grace_period_seconds
+        self._skills_root = Path(skills_root).resolve() if skills_root is not None else None
 
         # Sandboxing configuration
         # If python_executable was explicitly passed with custom binary/command, default use_sandbox=False
@@ -148,10 +153,14 @@ class SkillProcessSupervisor:
             return len(self._active_processes)
 
     def is_supported(self, skill_id: str) -> bool:
-        """Verify whether a skill ID is in the explicit worker-supported allowlist."""
-        return skill_id in WORKER_SUPPORTED_SKILLS
+        """Verify whether a skill ID is in the explicit worker-supported allowlist or is an external user skill."""
+        return skill_id in WORKER_SUPPORTED_SKILLS or (isinstance(skill_id, str) and skill_id.startswith("user."))
 
-    def execute(self, request: ExecuteRequest) -> ExecuteResponse:
+    def execute(
+        self,
+        request: ExecuteRequest,
+        package_path: Path | str | None = None,
+    ) -> ExecuteResponse:
         """Execute a validated ExecuteRequest in a fresh, isolated child subprocess.
 
         Guarantees:
@@ -181,7 +190,78 @@ class SkillProcessSupervisor:
                     f"Request ID '{request.request_id}' is already active in supervisor.",
                 )
 
-        # 2. Acquire concurrency capacity slot
+        # 2. Package path validation
+        resolved_pkg_path: Path | None = None
+        if package_path is not None and not request.skill_id.startswith("user."):
+            return create_error_response(
+                request.request_id,
+                "invalid_package_path",
+                f"External package path provided for non-external skill '{request.skill_id}'.",
+            )
+
+        if package_path is not None or request.skill_id.startswith("user."):
+            if self._skills_root is None:
+                return create_error_response(
+                    request.request_id,
+                    "unconfigured_skills_root",
+                    "External skill execution rejected: no trusted external skills root is configured.",
+                )
+
+            if package_path is None:
+                return create_error_response(
+                    request.request_id,
+                    "missing_package_path",
+                    f"External skill '{request.skill_id}' requires a valid package_path.",
+                )
+
+            try:
+                resolved_pkg_path = Path(package_path).resolve()
+            except Exception as exc:
+                return create_error_response(
+                    request.request_id,
+                    "invalid_package_path",
+                    f"Invalid package path '{package_path}': {exc}",
+                )
+
+            if not request.skill_id.startswith("user."):
+                return create_error_response(
+                    request.request_id,
+                    "invalid_package_path",
+                    f"External package path provided for non-external skill '{request.skill_id}'.",
+                )
+
+            if not resolved_pkg_path.is_dir():
+                return create_error_response(
+                    request.request_id,
+                    "package_not_found",
+                    f"External package path '{resolved_pkg_path}' is not a directory or does not exist.",
+                )
+
+            expected_prefix = f"user.{resolved_pkg_path.name}"
+            if request.skill_id != expected_prefix:
+                return create_error_response(
+                    request.request_id,
+                    "identity_mismatch",
+                    f"External package directory name '{resolved_pkg_path.name}' does not match requested skill ID '{request.skill_id}'.",
+                )
+
+            try:
+                resolved_pkg_path.relative_to(self._skills_root)
+            except ValueError:
+                return create_error_response(
+                    request.request_id,
+                    "invalid_package_path",
+                    f"External package path '{resolved_pkg_path}' is outside configured trusted skills root '{self._skills_root}'.",
+                )
+
+            if resolved_pkg_path.parent != self._skills_root:
+                return create_error_response(
+                    request.request_id,
+                    "invalid_package_path",
+                    f"External package path '{resolved_pkg_path}' must be an immediate child directory of trusted skills root '{self._skills_root}'.",
+                )
+
+        # 3. Acquire concurrency capacity slot
         acquired = self._semaphore.acquire(blocking=False)
         if not acquired:
             logger.warning(
@@ -198,6 +278,7 @@ class SkillProcessSupervisor:
         reservation = LaunchReservation(
             request_id=request.request_id,
             deadline=absolute_deadline,
+            package_path=resolved_pkg_path,
         )
 
         with self._lock:
@@ -284,6 +365,19 @@ class SkillProcessSupervisor:
         session_id = str(uuid.uuid4())
         h_lock: int | None = None
 
+        if reservation.package_path is not None:
+            # External skill execution MUST require full sandboxed launcher environment
+            if not self._use_sandbox or self._launcher is None or self._session_registry is None:
+                spawn_error = SupervisorError(
+                    "External skills require Windows AppContainer sandboxed execution. "
+                    "Cannot execute external skill when sandboxing is disabled or unavailable."
+                )
+                with self._lock:
+                    reservation.proc = None
+                    reservation.error = spawn_error
+                    reservation.completed = True
+                return
+
         if self._use_sandbox and self._launcher is not None and self._session_registry is not None:
             try:
                 h_lock = self._session_registry.acquire_session_lock(session_id, create_new=True)
@@ -291,6 +385,8 @@ class SkillProcessSupervisor:
                     session_id=session_id,
                     h_lock=h_lock,
                     deadline=reservation.deadline,
+                    package_to_stage=reservation.package_path,
+                    skills_root=self._skills_root,
                 )
             except ProcessReapError as reap_err:
                 spawn_error = reap_err
@@ -307,6 +403,7 @@ class SkillProcessSupervisor:
                         pass
         else:
             try:
+                # Built-in skills only (package_path is guaranteed to be None)
                 proc = subprocess.Popen(
                     [self._python_executable, "-m", "app.skills.worker"],
                     stdin=subprocess.PIPE,
@@ -595,6 +692,13 @@ class SkillProcessSupervisor:
                         self._session_registry.complete_session(proc.session_id, proc.h_lock)
                     except Exception as comp_exc:
                         logger.warning("complete_session error for '%s': %s", proc.session_id, comp_exc)
+
+        if reservation.temp_scratch_dir is not None:
+            try:
+                reservation.temp_scratch_dir.cleanup()
+            except Exception:
+                pass
+            reservation.temp_scratch_dir = None
 
         with self._lock:
             if not reservation.completed:

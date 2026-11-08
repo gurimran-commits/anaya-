@@ -376,8 +376,9 @@ si.StartupInfo.cb = ctypes.sizeof(STARTUPINFOEXW)
 si.lpAttributeList = ctypes.cast(buf, wintypes.LPVOID)
 pi = PROCESS_INFORMATION()
 
+cmd = f'"{sys.executable}" -c "import time; time.sleep(100)"'
 res = kernel32.CreateProcessW(
-    None, "notepad.exe", None, None, False,
+    None, cmd, None, None, False,
     CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT,
     None, None, ctypes.byref(si), ctypes.byref(pi)
 )
@@ -448,8 +449,9 @@ si.StartupInfo.cb = ctypes.sizeof(STARTUPINFOEXW)
 si.lpAttributeList = ctypes.cast(buf, wintypes.LPVOID)
 pi = PROCESS_INFORMATION()
 
+cmd = f'"{sys.executable}" -c "import time; time.sleep(100)"'
 res = kernel32.CreateProcessW(
-    None, "notepad.exe", None, None, False,
+    None, cmd, None, None, False,
     CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT,
     None, None, ctypes.byref(si), ctypes.byref(pi)
 )
@@ -593,9 +595,12 @@ class TestControlledNetworkIsolation:
         finally:
             host_sock.close()
 
+        server_thread.join(timeout=2.0)
+
         # 3. Start second listener for sandboxed child test
         server2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server2.bind(("127.0.0.1", host_port))
+        server2.bind(("127.0.0.1", 0))
+        child_port = server2.getsockname()[1]
         server2.listen(1)
 
         def _second_listener():
@@ -619,7 +624,7 @@ class TestControlledNetworkIsolation:
             "s.settimeout(1.0)\n"
             "res = {'connected': False, 'error_type': None, 'errno': None}\n"
             "try:\n"
-            f"    s.connect(('127.0.0.1', {host_port}))\n"
+            f"    s.connect(('127.0.0.1', {child_port}))\n"
             "    res['connected'] = True\n"
             "    with open('loopback_res.json', 'w') as f:\n"
             "        json.dump(res, f)\n"

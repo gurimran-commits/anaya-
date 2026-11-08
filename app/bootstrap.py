@@ -256,6 +256,7 @@ def create_controller(
     model_manager: ModelManager | None = None
     initialized_runtime: AnayaRuntime | None = None
     initialized_filesystem_service: FilesystemService | None = None
+    skill_supervisor: Any | None = None
 
     try:
         # 1. Authoritative Shared Approval Service
@@ -272,9 +273,15 @@ def create_controller(
             if skill_permission_grants is None
             else skill_permission_grants
         )
+        from app.skills.discovery import get_default_skills_root
+        from app.skills.supervisor import SkillProcessSupervisor
+
+        trusted_skills_root = get_default_skills_root()
+        skill_supervisor = SkillProcessSupervisor(skills_root=trusted_skills_root)
         skill_manager = SkillManager(
             approval_service=shared_approval_service,
             skill_permission_grants=effective_grants,
+            supervisor=skill_supervisor,
         )
 
         # 4. Local AI Subsystem (Lazy)
@@ -456,6 +463,13 @@ def create_controller(
             except Exception:
                 pass
             initialized_filesystem_service = None
+
+        if skill_supervisor is not None:
+            try:
+                skill_supervisor.shutdown()
+            except Exception:
+                pass
+            skill_supervisor = None
 
         if initialized_runtime is not None:
             try:

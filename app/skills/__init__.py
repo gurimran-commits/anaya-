@@ -36,6 +36,11 @@ from app.skills.discovery import (
     register_external_skills,
     scan_and_register_external_skills,
 )
+from app.skills.staging import (
+    StagedPackage,
+    StagingError,
+    stage_external_package,
+)
 from app.skills.skill_executor import SkillExecutor
 from app.skills.skill_manager import SkillManager
 from app.skills.skill_registry import SkillRegistry
@@ -78,4 +83,7 @@ __all__ = [
     "get_default_skills_root",
     "register_external_skills",
     "scan_and_register_external_skills",
+    "StagedPackage",
+    "StagingError",
+    "stage_external_package",
 ]

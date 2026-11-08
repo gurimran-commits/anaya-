@@ -423,6 +423,8 @@ class SandboxedProcessLauncher:
         h_lock: int,
         deadline: float,
         memory_limit_bytes: int | None = 256 * 1024 * 1024,
+        package_to_stage: Path | str | None = None,
+        skills_root: Path | str | None = None,
     ) -> SandboxedProcess:
         """Execute the atomic 12-step process launch under AppContainer and Job Object containment."""
         if sys.platform != "win32" or kernel32 is None or advapi32 is None:
@@ -460,6 +462,21 @@ class SandboxedProcessLauncher:
                 "created_at_utc": datetime.now(timezone.utc).isoformat(),
             },
         )
+
+        # 4.5. Stage external skill package if provided
+        if package_to_stage is not None:
+            from app.skills.staging import stage_external_package, StagingError
+            try:
+                stage_external_package(
+                    package_source_path=package_to_stage,
+                    session_scratch_dir=scratch_dir,
+                    worker_sid=profile.sid_string,
+                    skills_root=skills_root,
+                )
+            except StagingError as stg_err:
+                raise ProcessStartupError(f"Failed to stage external skill package: {stg_err}") from stg_err
+            except Exception as exc:
+                raise ProcessStartupError(f"Unexpected error staging external skill package: {exc}") from exc
 
         # 5. Create Job Object with approved limits
         limits = JobLimits(

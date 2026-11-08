@@ -243,7 +243,8 @@ class SkillExecutor:
                 )
 
         # 6. Route execution (isolated supervisor vs in-process)
-        if clean_id in self._isolated_skill_ids:
+        is_external = getattr(skill, "is_external", False) or clean_id.startswith("user.")
+        if clean_id in self._isolated_skill_ids or is_external:
             return self._execute_isolated(skill, clean_id, validated_inputs)
 
         # 7. In-process execution (default for trusted built-in skills)
@@ -257,6 +258,12 @@ class SkillExecutor:
     ) -> SkillResult:
         """Dispatch execution through the isolated worker supervisor without in-process fallback."""
         if self._supervisor is None:
+            if getattr(skill, "is_external", False) or clean_id.startswith("user."):
+                return SkillResult(
+                    success=False,
+                    error="external_skill_execution_unavailable",
+                    message=f"External skill '{clean_id}' cannot be executed directly in-process and no supervisor is available.",
+                )
             return SkillResult(
                 success=False,
                 error="supervisor_unavailable",
@@ -267,21 +274,28 @@ class SkillExecutor:
             return SkillResult(
                 success=False,
                 error="unsupported_skill",
-                message=(
-                    f"Skill '{clean_id}' is not supported by the isolated worker registry in Step 10.2. "
-                    "External skill dynamic loading is deferred to Phase 10.4."
-                ),
+                message=f"Skill '{clean_id}' is not supported by the isolated worker supervisor.",
             )
 
         req_id = f"req-{uuid.uuid4().hex[:16]}"
+        package_path: Any | None = None
+        entrypoint: str | None = None
+
+        if getattr(skill, "is_external", False):
+            package_path = getattr(skill, "package_path", None)
+            manifest = getattr(skill, "manifest", None)
+            if manifest is not None:
+                entrypoint = manifest.entrypoint
+
         request = ExecuteRequest(
             request_id=req_id,
             skill_id=clean_id,
             inputs=validated_inputs,
+            entrypoint=entrypoint,
         )
 
         try:
-            response = self._supervisor.execute(request)
+            response = self._supervisor.execute(request, package_path=package_path)
         except Exception as exc:
             logger.exception("Supervisor execution error for skill '%s'", clean_id)
             return SkillResult(
@@ -322,6 +336,13 @@ class SkillExecutor:
         validated_inputs: dict[str, Any],
     ) -> SkillResult:
         """Execute a skill in-process under exception isolation."""
+        if getattr(skill, "is_external", False) or clean_id.startswith("user."):
+            return SkillResult(
+                success=False,
+                error="external_skill_in_process_denied",
+                message=f"External skill '{clean_id}' cannot be executed directly in-process.",
+            )
+
         try:
             result = skill.execute(validated_inputs)
             if isinstance(result, SkillResult):

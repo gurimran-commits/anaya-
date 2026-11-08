@@ -85,6 +85,7 @@ STDLIB_EXCLUDE_DIRS: frozenset[str] = frozenset(
 
 # Files packaged into anaya_worker.zip
 WORKER_ALLOWLIST_FILES: tuple[str, ...] = (
+    "app/skills/manifest.py",
     "app/skills/models.py",
     "app/skills/protocol.py",
     "app/skills/skill_registry.py",

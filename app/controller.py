@@ -241,6 +241,13 @@ class AssistantController:
                     cleanup_errors.append(exc)
                     logger.error("Error closing FilesystemService: %s", exc)
 
+            if self._skill_manager is not None and getattr(self._skill_manager, "supervisor", None) is not None:
+                try:
+                    self._skill_manager.supervisor.shutdown()
+                except Exception as exc:
+                    cleanup_errors.append(exc)
+                    logger.error("Error shutting down SkillProcessSupervisor: %s", exc)
+
             if self._model_manager is not None:
                 try:
                     self._model_manager.unload_active_model()
